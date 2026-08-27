@@ -2,10 +2,9 @@ use crate::bmp::Bmp;
 
 const CELL_SIZE: usize = 8;
 const HALF_CELL: usize = CELL_SIZE / 2;
-const MIN_TARGET_DIFFERENCE: i32 = 6;
-const MAX_TARGET_DIFFERENCE: i32 = 16;
-const ADJUSTMENT_STEP: i16 = 2;
-const MAX_ADJUSTMENT_PASSES: usize = 80;
+const QUANTIZATION_STEP: i32 = 20;
+const ADJUSTMENT_STEP: i16 = 1;
+const MAX_ADJUSTMENT_PASSES: usize = 32;
 
 pub fn embed(image: &mut Bmp, data: &[u8]) -> Result<(), String> {
     let required_bits = data
@@ -62,17 +61,18 @@ fn capacity_bits(image: &Bmp) -> usize {
 
 fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), String> {
     let (origin_x, origin_y) = cell_origin(image, cell_index);
-    let target_difference = target_difference(image, origin_x, origin_y);
+    let initial_difference = cell_difference(image, origin_x, origin_y);
+    let target = quantization_target(initial_difference, bit);
 
     for _ in 0..MAX_ADJUSTMENT_PASSES {
         let difference = cell_difference(image, origin_x, origin_y);
-        let encoded_difference = if bit { difference } else { -difference };
+        let error = target - difference;
 
-        if encoded_difference >= target_difference {
+        if error.abs() <= 1 {
             return Ok(());
         }
 
-        if bit {
+        if error > 0 {
             adjust_half(image, origin_x, origin_y, true, ADJUSTMENT_STEP);
             adjust_half(image, origin_x, origin_y, false, -ADJUSTMENT_STEP);
         } else {
@@ -82,14 +82,15 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
     }
 
     Err(format!(
-        "failed to establish a reliable luminance difference in carrier cell {cell_index}"
+        "failed to quantize carrier cell {cell_index} to target difference {target}"
     ))
 }
 
 fn read_cell_bit(image: &Bmp, cell_index: usize) -> bool {
     let (origin_x, origin_y) = cell_origin(image, cell_index);
+    let difference = cell_difference(image, origin_x, origin_y);
 
-    cell_difference(image, origin_x, origin_y) >= 0
+    decode_difference(difference)
 }
 
 fn cell_origin(image: &Bmp, cell_index: usize) -> (usize, usize) {
@@ -161,37 +162,36 @@ fn cell_difference(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
     left_average as i32 - right_average as i32
 }
 
-fn target_difference(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
-    let activity = cell_activity(image, origin_x, origin_y);
+fn quantization_target(difference: i32, bit: bool) -> i32 {
+    let desired_parity = if bit { 1 } else { 0 };
+    let nearest = nearest_bucket(difference);
 
-    (activity / 2).clamp(MIN_TARGET_DIFFERENCE, MAX_TARGET_DIFFERENCE)
+    if nearest.rem_euclid(2) == desired_parity {
+        return nearest * QUANTIZATION_STEP;
+    }
+
+    let lower = (nearest - 1) * QUANTIZATION_STEP;
+    let upper = (nearest + 1) * QUANTIZATION_STEP;
+
+    if difference.abs_diff(lower) <= difference.abs_diff(upper) {
+        lower
+    } else {
+        upper
+    }
 }
 
-fn cell_activity(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
-    let mut total_difference = 0_u32;
-    let mut sample_count = 0_u32;
+fn nearest_bucket(difference: i32) -> i32 {
+    let half_step = QUANTIZATION_STEP / 2;
 
-    for y in origin_y..origin_y + CELL_SIZE {
-        for x in origin_x..origin_x + CELL_SIZE - 1 {
-            let left = image.luminance(x, y);
-            let right = image.luminance(x + 1, y);
-
-            total_difference += left.abs_diff(right);
-            sample_count += 1;
-        }
+    if difference >= 0 {
+        (difference + half_step) / QUANTIZATION_STEP
+    } else {
+        (difference - half_step) / QUANTIZATION_STEP
     }
+}
 
-    for y in origin_y..origin_y + CELL_SIZE - 1 {
-        for x in origin_x..origin_x + CELL_SIZE {
-            let upper = image.luminance(x, y);
-            let lower = image.luminance(x, y + 1);
-
-            total_difference += upper.abs_diff(lower);
-            sample_count += 1;
-        }
-    }
-
-    (total_difference / sample_count) as i32
+fn decode_difference(difference: i32) -> bool {
+    nearest_bucket(difference).rem_euclid(2) != 0
 }
 
 fn adjust_half(image: &mut Bmp, origin_x: usize, origin_y: usize, left_half: bool, delta: i16) {
@@ -210,7 +210,7 @@ fn adjust_half(image: &mut Bmp, origin_x: usize, origin_y: usize, left_half: boo
 
 #[cfg(test)]
 mod tests {
-    use super::{embed, extract_bytes};
+    use super::{QUANTIZATION_STEP, decode_difference, embed, extract_bytes, quantization_target};
     use crate::bmp::Bmp;
 
     #[test]
@@ -223,5 +223,27 @@ mod tests {
         let recovered = extract_bytes(&image, payload.len()).expect("extraction should succeed");
 
         assert_eq!(recovered, payload.to_vec());
+    }
+
+    #[test]
+    fn quantization_targets_encode_requested_bit() {
+        for difference in -255..=255 {
+            for bit in [false, true] {
+                let target = quantization_target(difference, bit);
+
+                assert_eq!(decode_difference(target), bit);
+            }
+        }
+    }
+
+    #[test]
+    fn quantization_never_moves_more_than_one_step() {
+        for difference in -255..=255 {
+            for bit in [false, true] {
+                let target = quantization_target(difference, bit);
+
+                assert!(difference.abs_diff(target) <= QUANTIZATION_STEP as u32);
+            }
+        }
     }
 }

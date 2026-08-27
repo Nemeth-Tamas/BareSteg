@@ -49,26 +49,48 @@ The first carrier version proved the transport but produced a clearly visible
 band of modified cells because logical cells were allocated sequentially and
 every cell was forced to a luminance difference of 40.
 
-### Current Slice - Carrier Visibility
+### Completed Slice - Distributed Adaptive Carrier
 
 - [x] Replace sequential carrier allocation with deterministic whole-image
       cell permutation
 - [x] Replace fixed luminance strength with content-adaptive modulation
 - [x] Reduce minimum carrier luminance difference substantially
 - [x] Preserve unique one-to-one physical cell allocation
-- [ ] Verify exact payload roundtrip after distributed carrier change
-- [ ] Visually compare the new carrier against the original image
-- [ ] Commit and push distributed adaptive carrier implementation
+- [x] Verify exact payload roundtrip after distributed carrier change
+- [x] Visually compare the new carrier against the original image
+- [x] Commit and push distributed adaptive carrier implementation
 
-The distributed carrier uses a deterministic coprime permutation to scatter
-logical bits across the available image cells.
+The distributed carrier removed the obvious contiguous payload band and made
+the hidden data substantially less visible.
 
-Carrier modulation now ranges from 6 to 16 luminance levels based on local
-image activity. Smooth regions receive weaker modulation while textured
-regions can tolerate stronger modulation.
+A same-resolution JPEG quality-30 stress test of the uploaded carrier recovered
+all 536 encoded frame bits without error, showing substantial compression
+margin in the current raw carrier.
 
-This remains a raw-carrier visibility improvement. Messenger recompression
-resilience has not yet been demonstrated.
+### Current Slice - Bounded Quantization Carrier
+
+- [x] Replace sign-forcing carrier modulation with quantization-index
+      modulation
+- [x] Bound required luminance-difference movement to one quantization step
+- [x] Preserve deterministic whole-image cell permutation
+- [x] Add exhaustive quantization target tests
+- [ ] Verify exact payload roundtrip with quantized carrier
+- [ ] Visually compare quantized carrier against previous carrier
+- [ ] Commit and push quantized carrier implementation
+
+The QIM carrier encodes bits using alternating luminance-difference buckets
+rather than requiring a particular positive or negative sign.
+
+With a quantization step of 20, embedding never needs to move a cell's
+left-versus-right luminance difference by more than 20 levels. In ordinary
+unsaturated cells this corresponds to no more than roughly 10 levels of
+per-half pixel adjustment.
+
+This should substantially reduce visible changes in naturally asymmetric
+cells while retaining useful tolerance against lossy recompression.
+
+Messenger resizing resilience remains unresolved and is a later carrier-layout
+problem rather than a reason to increase raw modulation strength.
 
 ## Planned Initial Source Layout
 
