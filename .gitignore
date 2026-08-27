@@ -1,5 +1,5 @@
 /target
-carrier.bmp
-hidden.bmp
-recovered.txt
-secret.txt
+carrier*.bmp
+hidden*.bmp
+recovered*.txt
+secret*.txt

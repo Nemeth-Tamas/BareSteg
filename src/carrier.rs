@@ -2,8 +2,9 @@ use crate::bmp::Bmp;
 
 const CELL_SIZE: usize = 8;
 const HALF_CELL: usize = CELL_SIZE / 2;
-const TARGET_DIFFERENCE: i32 = 40;
-const ADJUSTMENT_STEP: i16 = 4;
+const MIN_TARGET_DIFFERENCE: i32 = 6;
+const MAX_TARGET_DIFFERENCE: i32 = 16;
+const ADJUSTMENT_STEP: i16 = 2;
 const MAX_ADJUSTMENT_PASSES: usize = 80;
 
 pub fn embed(image: &mut Bmp, data: &[u8]) -> Result<(), String> {
@@ -61,12 +62,13 @@ fn capacity_bits(image: &Bmp) -> usize {
 
 fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), String> {
     let (origin_x, origin_y) = cell_origin(image, cell_index);
+    let target_difference = target_difference(image, origin_x, origin_y);
 
     for _ in 0..MAX_ADJUSTMENT_PASSES {
         let difference = cell_difference(image, origin_x, origin_y);
         let encoded_difference = if bit { difference } else { -difference };
 
-        if encoded_difference >= TARGET_DIFFERENCE {
+        if encoded_difference >= target_difference {
             return Ok(());
         }
 
@@ -92,11 +94,50 @@ fn read_cell_bit(image: &Bmp, cell_index: usize) -> bool {
 
 fn cell_origin(image: &Bmp, cell_index: usize) -> (usize, usize) {
     let cells_per_row = image.width() / CELL_SIZE;
+    let total_cells = capacity_bits(image);
+    let physical_index = permuted_cell_index(total_cells, cell_index);
 
     (
-        (cell_index % cells_per_row) * CELL_SIZE,
-        (cell_index / cells_per_row) * CELL_SIZE,
+        (physical_index % cells_per_row) * CELL_SIZE,
+        (physical_index / cells_per_row) * CELL_SIZE,
     )
+}
+
+fn permuted_cell_index(total_cells: usize, logical_index: usize) -> usize {
+    if total_cells <= 1 {
+        return 0;
+    }
+
+    let step = permutation_step(total_cells);
+    let offset = total_cells / 7;
+
+    ((logical_index as u128 * step as u128 + offset as u128) % total_cells as u128) as usize
+}
+
+fn permutation_step(total_cells: usize) -> usize {
+    let mut step = ((total_cells as u128 * 618_033_989_u128) / 1_000_000_000_u128) as usize;
+
+    step = step.max(1);
+
+    while greatest_common_divisor(step, total_cells) != 1 {
+        step += 1;
+
+        if step >= total_cells {
+            step = 1;
+        }
+    }
+
+    step
+}
+
+fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+
+    left
 }
 
 fn cell_difference(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
@@ -118,6 +159,39 @@ fn cell_difference(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
     let right_average = right_sum / pixels_per_half;
 
     left_average as i32 - right_average as i32
+}
+
+fn target_difference(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
+    let activity = cell_activity(image, origin_x, origin_y);
+
+    (activity / 2).clamp(MIN_TARGET_DIFFERENCE, MAX_TARGET_DIFFERENCE)
+}
+
+fn cell_activity(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
+    let mut total_difference = 0_u32;
+    let mut sample_count = 0_u32;
+
+    for y in origin_y..origin_y + CELL_SIZE {
+        for x in origin_x..origin_x + CELL_SIZE - 1 {
+            let left = image.luminance(x, y);
+            let right = image.luminance(x + 1, y);
+
+            total_difference += left.abs_diff(right);
+            sample_count += 1;
+        }
+    }
+
+    for y in origin_y..origin_y + CELL_SIZE - 1 {
+        for x in origin_x..origin_x + CELL_SIZE {
+            let upper = image.luminance(x, y);
+            let lower = image.luminance(x, y + 1);
+
+            total_difference += upper.abs_diff(lower);
+            sample_count += 1;
+        }
+    }
+
+    (total_difference / sample_count) as i32
 }
 
 fn adjust_half(image: &mut Bmp, origin_x: usize, origin_y: usize, left_half: bool, delta: i16) {

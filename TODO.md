@@ -36,19 +36,39 @@ resizing while remaining decodable by BareSteg.
 - [x] Create Cargo project
 - [x] Create initial multi-file source layout
 - [x] Commit and push the initial project creation to `main`
-- [ ] Verify all formatting, tests, and Clippy gates
-- [ ] Verify an end-to-end BMP hide/reveal roundtrip
-- [ ] Commit and push the first working proof of concept
+- [x] Verify all formatting, tests, and Clippy gates
+- [x] Verify an end-to-end BMP hide/reveal roundtrip
+- [x] Commit and push the first working proof of concept
+- [x] Confirm raw relative-luminance carrier transport works
 
-The current slice implements the first real BareSteg proof of concept:
-24-bit BI_RGB BMP parsing and writing, luminance-cell carrier modulation,
-BareSteg framing, CRC32 integrity checking, and hide/reveal CLI commands.
+The first BareSteg proof of concept successfully hides and independently
+recovers arbitrary payload bytes from a 24-bit BI_RGB BMP with CRC32
+verification.
 
-The POC uses one logical bit per 8x8 image cell. Each cell is divided into two
-vertical halves. A bit is represented by which half has the higher average
-luminance, with a deliberate minimum difference added during embedding.
+The first carrier version proved the transport but produced a clearly visible
+band of modified cells because logical cells were allocated sequentially and
+every cell was forced to a luminance difference of 40.
 
-This is intentionally not conventional LSB steganography.
+### Current Slice - Carrier Visibility
+
+- [x] Replace sequential carrier allocation with deterministic whole-image
+      cell permutation
+- [x] Replace fixed luminance strength with content-adaptive modulation
+- [x] Reduce minimum carrier luminance difference substantially
+- [x] Preserve unique one-to-one physical cell allocation
+- [ ] Verify exact payload roundtrip after distributed carrier change
+- [ ] Visually compare the new carrier against the original image
+- [ ] Commit and push distributed adaptive carrier implementation
+
+The distributed carrier uses a deterministic coprime permutation to scatter
+logical bits across the available image cells.
+
+Carrier modulation now ranges from 6 to 16 luminance levels based on local
+image activity. Smooth regions receive weaker modulation while textured
+regions can tolerate stronger modulation.
+
+This remains a raw-carrier visibility improvement. Messenger recompression
+resilience has not yet been demonstrated.
 
 ## Planned Initial Source Layout
 
