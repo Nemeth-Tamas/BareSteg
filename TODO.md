@@ -31,17 +31,24 @@ resizing while remaining decodable by BareSteg.
 
 ## Current Phase
 
-### Bootstrap - Project Creation
+### Milestone 1 - BMP Roundtrip Proof of Concept
 
-- [ ] Create Cargo project
-- [ ] Create initial multi-file source layout
-- [ ] Confirm the project builds using only `std`
-- [ ] Commit and push the initial project creation to `main`
+- [x] Create Cargo project
+- [x] Create initial multi-file source layout
+- [x] Commit and push the initial project creation to `main`
+- [ ] Verify all formatting, tests, and Clippy gates
+- [ ] Verify an end-to-end BMP hide/reveal roundtrip
+- [ ] Commit and push the first working proof of concept
 
-This bootstrap commit is allowed to contain only the project structure,
-documentation, module boundaries, and minimal compilable scaffolding.
+The current slice implements the first real BareSteg proof of concept:
+24-bit BI_RGB BMP parsing and writing, luminance-cell carrier modulation,
+BareSteg framing, CRC32 integrity checking, and hide/reveal CLI commands.
 
-The next commit MUST implement the first working proof of concept.
+The POC uses one logical bit per 8x8 image cell. Each cell is divided into two
+vertical halves. A bit is represented by which half has the higher average
+luminance, with a deliberate minimum difference added during embedding.
+
+This is intentionally not conventional LSB steganography.
 
 ## Planned Initial Source Layout
 
