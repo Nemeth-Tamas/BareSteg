@@ -1,2 +1,235 @@
-// Error-correction coding will be added after the raw carrier POC has been
-// measured against real recompression damage.
+const HEADER_REPETITIONS: usize = 5;
+const PAYLOAD_REPETITIONS: usize = 3;
+
+pub fn encode_frame(frame: &[u8], header_len: usize) -> Result<Vec<u8>, String> {
+    if frame.len() < header_len {
+        return Err(format!(
+            "frame is too short for ECC header: have {} bytes, need {header_len}",
+            frame.len()
+        ));
+    }
+
+    let encoded_header = encode_repeated(&frame[..header_len], HEADER_REPETITIONS)?;
+    let encoded_payload = encode_repeated(&frame[header_len..], PAYLOAD_REPETITIONS)?;
+
+    let total_len = encoded_header
+        .len()
+        .checked_add(encoded_payload.len())
+        .ok_or_else(|| "ECC frame size overflowed this platform".to_string())?;
+
+    let mut encoded = Vec::with_capacity(total_len);
+
+    encoded.extend_from_slice(&encoded_header);
+    encoded.extend_from_slice(&encoded_payload);
+
+    Ok(encoded)
+}
+
+pub fn encoded_header_len(header_len: usize) -> Result<usize, String> {
+    encoded_len(header_len, HEADER_REPETITIONS)
+}
+
+pub fn encoded_frame_len(header_len: usize, payload_len: usize) -> Result<usize, String> {
+    encoded_header_len(header_len)?
+        .checked_add(encoded_len(payload_len, PAYLOAD_REPETITIONS)?)
+        .ok_or_else(|| "ECC frame size overflowed this platform".to_string())
+}
+
+pub fn decode_header(encoded_header: &[u8], header_len: usize) -> Result<Vec<u8>, String> {
+    decode_repeated(encoded_header, header_len, HEADER_REPETITIONS)
+}
+
+pub fn decode_frame(
+    encoded_frame: &[u8],
+    header_len: usize,
+    payload_len: usize,
+) -> Result<Vec<u8>, String> {
+    let encoded_header_len = encoded_header_len(header_len)?;
+    let expected_len = encoded_frame_len(header_len, payload_len)?;
+
+    if encoded_frame.len() != expected_len {
+        return Err(format!(
+            "ECC frame length mismatch: expected {expected_len} bytes, recovered {}",
+            encoded_frame.len()
+        ));
+    }
+
+    let header = decode_repeated(
+        &encoded_frame[..encoded_header_len],
+        header_len,
+        HEADER_REPETITIONS,
+    )?;
+
+    let payload = decode_repeated(
+        &encoded_frame[encoded_header_len..],
+        payload_len,
+        PAYLOAD_REPETITIONS,
+    )?;
+
+    let frame_len = header_len
+        .checked_add(payload_len)
+        .ok_or_else(|| "decoded frame size overflowed this platform".to_string())?;
+
+    let mut frame = Vec::with_capacity(frame_len);
+
+    frame.extend_from_slice(&header);
+    frame.extend_from_slice(&payload);
+
+    Ok(frame)
+}
+
+fn encoded_len(source_len: usize, repetitions: usize) -> Result<usize, String> {
+    source_len
+        .checked_mul(repetitions)
+        .ok_or_else(|| "ECC encoded size overflowed this platform".to_string())
+}
+
+fn encode_repeated(data: &[u8], repetitions: usize) -> Result<Vec<u8>, String> {
+    let source_bits = data
+        .len()
+        .checked_mul(8)
+        .ok_or_else(|| "ECC source bit count overflowed this platform".to_string())?;
+
+    let mut encoded = vec![0_u8; encoded_len(data.len(), repetitions)?];
+
+    for repetition in 0..repetitions {
+        let repetition_offset = repetition
+            .checked_mul(source_bits)
+            .ok_or_else(|| "ECC repetition offset overflowed this platform".to_string())?;
+
+        for bit_index in 0..source_bits {
+            if bit_at(data, bit_index) {
+                set_bit(&mut encoded, repetition_offset + bit_index);
+            }
+        }
+    }
+
+    Ok(encoded)
+}
+
+fn decode_repeated(
+    encoded: &[u8],
+    source_len: usize,
+    repetitions: usize,
+) -> Result<Vec<u8>, String> {
+    let expected_len = encoded_len(source_len, repetitions)?;
+
+    if encoded.len() != expected_len {
+        return Err(format!(
+            "ECC block length mismatch: expected {expected_len} bytes, recovered {}",
+            encoded.len()
+        ));
+    }
+
+    let source_bits = source_len
+        .checked_mul(8)
+        .ok_or_else(|| "ECC source bit count overflowed this platform".to_string())?;
+
+    let mut decoded = vec![0_u8; source_len];
+
+    for bit_index in 0..source_bits {
+        let mut one_votes = 0_usize;
+
+        for repetition in 0..repetitions {
+            let repetition_offset = repetition
+                .checked_mul(source_bits)
+                .ok_or_else(|| "ECC repetition offset overflowed this platform".to_string())?;
+
+            if bit_at(encoded, repetition_offset + bit_index) {
+                one_votes += 1;
+            }
+        }
+
+        if one_votes > repetitions / 2 {
+            set_bit(&mut decoded, bit_index);
+        }
+    }
+
+    Ok(decoded)
+}
+
+fn bit_at(bytes: &[u8], bit_index: usize) -> bool {
+    let byte = bytes[bit_index / 8];
+    let mask = 1_u8 << (7 - bit_index % 8);
+
+    byte & mask != 0
+}
+
+fn set_bit(bytes: &mut [u8], bit_index: usize) {
+    bytes[bit_index / 8] |= 1_u8 << (7 - bit_index % 8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame, decode_header, decode_repeated,
+        encode_frame, encode_repeated, encoded_header_len,
+    };
+
+    #[test]
+    fn repetition_roundtrip_recovers_exact_bytes() {
+        let data = b"BareSteg ECC test\x00\x55\xaa\xff";
+        let encoded = encode_repeated(data, PAYLOAD_REPETITIONS).expect("encoding should succeed");
+
+        let decoded = decode_repeated(&encoded, data.len(), PAYLOAD_REPETITIONS)
+            .expect("decoding should succeed");
+
+        assert_eq!(decoded, data.to_vec());
+    }
+
+    #[test]
+    fn majority_vote_recovers_when_one_entire_copy_is_destroyed() {
+        let data = b"one copy may die";
+        let mut encoded =
+            encode_repeated(data, PAYLOAD_REPETITIONS).expect("encoding should succeed");
+
+        for byte in &mut encoded[..data.len()] {
+            *byte ^= 0xff;
+        }
+
+        let decoded = decode_repeated(&encoded, data.len(), PAYLOAD_REPETITIONS)
+            .expect("majority decoding should succeed");
+
+        assert_eq!(decoded, data.to_vec());
+    }
+
+    #[test]
+    fn header_can_be_recovered_before_payload_length_is_known() {
+        let header = [0x5a_u8; 21];
+        let payload = [0xa5_u8; 37];
+        let mut frame = header.to_vec();
+
+        frame.extend_from_slice(&payload);
+
+        let encoded = encode_frame(&frame, header.len()).expect("frame encoding should succeed");
+        let header_encoded_len = encoded_header_len(header.len()).expect("header size should fit");
+
+        assert_eq!(header_encoded_len, header.len() * HEADER_REPETITIONS);
+
+        let recovered_header = decode_header(&encoded[..header_encoded_len], header.len())
+            .expect("header should decode independently");
+
+        assert_eq!(recovered_header, header.to_vec());
+    }
+
+    #[test]
+    fn protected_frame_roundtrip_recovers_exact_frame() {
+        let header = [0x42_u8; 21];
+        let payload = [0x81_u8; 31];
+        let mut frame = header.to_vec();
+
+        frame.extend_from_slice(&payload);
+
+        let encoded = encode_frame(&frame, header.len()).expect("frame encoding should succeed");
+
+        assert_eq!(
+            encoded.len(),
+            header.len() * HEADER_REPETITIONS + payload.len() * PAYLOAD_REPETITIONS
+        );
+
+        let decoded = decode_frame(&encoded, header.len(), payload.len())
+            .expect("protected frame should decode");
+
+        assert_eq!(decoded, frame);
+    }
+}

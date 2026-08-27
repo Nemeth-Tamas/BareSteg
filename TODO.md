@@ -123,7 +123,7 @@ problem rather than a reason to increase raw modulation strength.
   - standard-library-only CRC32 implementation
   - payload corruption detection
 
-- [ ] `src/ecc.rs`
+- [x] `src/ecc.rs`
   - reserved for redundancy/error-correction work after the first POC
 
 ## Milestone 1 - BMP Roundtrip Proof of Concept
@@ -212,11 +212,11 @@ All of these must work:
 
 After exact BMP roundtrip works:
 
-- [ ] add repeated carrier bits
-- [ ] majority-vote repeated bits
-- [ ] interleave repeated bits across distant image regions
-- [ ] protect header more heavily than payload
-- [ ] recover from isolated damaged carrier cells
+- [x] add repeated carrier bits
+- [x] majority-vote repeated bits
+- [x] interleave repeated bits across distant image regions
+- [x] protect header more heavily than payload
+- [x] recover from isolated damaged carrier cells
 - [ ] expose useful corruption/recovery diagnostics
 
 ### Synchronization
@@ -232,8 +232,8 @@ After exact BMP roundtrip works:
 Start simple and measure before implementing anything huge.
 
 - [ ] characterize actual carrier bit errors
-- [ ] implement repetition coding
-- [ ] implement interleaving
+- [x] implement repetition coding
+- [x] implement interleaving
 - [ ] evaluate Hamming-style coding
 - [ ] evaluate convolutional coding
 - [ ] consider stronger ECC only if real testing proves it necessary

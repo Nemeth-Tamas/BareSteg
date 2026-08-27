@@ -33,9 +33,10 @@ fn hide(carrier_path: &str, payload_path: &str, output_path: &str) -> Result<(),
     let payload = fs::read(payload_path)
         .map_err(|error| format!("failed to read payload '{payload_path}': {error}"))?;
     let frame = frame::encode(&payload)?;
+    let protected_frame = ecc::encode_frame(&frame, frame::HEADER_LEN)?;
     let mut image = Bmp::load(carrier_path)?;
 
-    carrier::embed(&mut image, &frame)?;
+    carrier::embed(&mut image, &protected_frame)?;
     image.save(output_path)?;
 
     println!(
@@ -51,13 +52,14 @@ fn hide(carrier_path: &str, payload_path: &str, output_path: &str) -> Result<(),
 
 fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
     let image = Bmp::load(image_path)?;
-    let header = carrier::extract_bytes(&image, frame::HEADER_LEN)?;
+    let protected_header_len = ecc::encoded_header_len(frame::HEADER_LEN)?;
+    let protected_header = carrier::extract_bytes(&image, protected_header_len)?;
+    let header = ecc::decode_header(&protected_header, frame::HEADER_LEN)?;
     let payload_len = frame::payload_len_from_header(&header)?;
-    let frame_len = frame::HEADER_LEN
-        .checked_add(payload_len)
-        .ok_or_else(|| "BareSteg frame length overflowed this platform".to_string())?;
-    let encoded_frame = carrier::extract_bytes(&image, frame_len)?;
-    let payload = frame::decode(&encoded_frame)?;
+    let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
+    let protected_frame = carrier::extract_bytes(&image, protected_frame_len)?;
+    let recovered_frame = ecc::decode_frame(&protected_frame, frame::HEADER_LEN, payload_len)?;
+    let payload = frame::decode(&recovered_frame)?;
 
     fs::write(output_path, &payload)
         .map_err(|error| format!("failed to write recovered payload '{output_path}': {error}"))?;
