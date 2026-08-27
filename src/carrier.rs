@@ -1,10 +1,12 @@
 use crate::bmp::Bmp;
 
-const CELL_SIZE: usize = 8;
-const HALF_CELL: usize = CELL_SIZE / 2;
-const QUANTIZATION_STEP: i32 = 20;
+const CELL_SIZE: usize = 16;
+const BLOCK_SIZE: usize = 4;
+const BLOCKS_PER_SIDE: usize = CELL_SIZE / BLOCK_SIZE;
+const BLOCK_COUNT: usize = BLOCKS_PER_SIDE * BLOCKS_PER_SIDE;
+const QUANTIZATION_STEP: i32 = 8;
 const ADJUSTMENT_STEP: i16 = 1;
-const MAX_ADJUSTMENT_PASSES: usize = 32;
+const MAX_ADJUSTMENT_PASSES: usize = 12;
 
 pub fn embed(image: &mut Bmp, data: &[u8]) -> Result<(), String> {
     let required_bits = data
@@ -61,36 +63,38 @@ fn capacity_bits(image: &Bmp) -> usize {
 
 fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), String> {
     let (origin_x, origin_y) = cell_origin(image, cell_index);
-    let initial_difference = cell_difference(image, origin_x, origin_y);
-    let target = quantization_target(initial_difference, bit);
+    let mask = carrier_mask(cell_index);
+    let initial_correlation = cell_correlation(image, origin_x, origin_y, mask);
+    let target = quantization_target(initial_correlation, bit);
 
     for _ in 0..MAX_ADJUSTMENT_PASSES {
-        let difference = cell_difference(image, origin_x, origin_y);
-        let error = target - difference;
+        let correlation = cell_correlation(image, origin_x, origin_y, mask);
+        let error = target - correlation;
 
         if error.abs() <= 1 {
             return Ok(());
         }
 
-        if error > 0 {
-            adjust_half(image, origin_x, origin_y, true, ADJUSTMENT_STEP);
-            adjust_half(image, origin_x, origin_y, false, -ADJUSTMENT_STEP);
+        let direction = if error > 0 {
+            ADJUSTMENT_STEP
         } else {
-            adjust_half(image, origin_x, origin_y, true, -ADJUSTMENT_STEP);
-            adjust_half(image, origin_x, origin_y, false, ADJUSTMENT_STEP);
-        }
+            -ADJUSTMENT_STEP
+        };
+
+        adjust_pattern(image, origin_x, origin_y, mask, direction);
     }
 
     Err(format!(
-        "failed to quantize carrier cell {cell_index} to target difference {target}"
+        "failed to quantize carrier cell {cell_index} to target correlation {target}"
     ))
 }
 
 fn read_cell_bit(image: &Bmp, cell_index: usize) -> bool {
     let (origin_x, origin_y) = cell_origin(image, cell_index);
-    let difference = cell_difference(image, origin_x, origin_y);
+    let mask = carrier_mask(cell_index);
+    let correlation = cell_correlation(image, origin_x, origin_y, mask);
 
-    decode_difference(difference)
+    decode_difference(correlation)
 }
 
 fn cell_origin(image: &Bmp, cell_index: usize) -> (usize, usize) {
@@ -141,25 +145,67 @@ fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
     left
 }
 
-fn cell_difference(image: &Bmp, origin_x: usize, origin_y: usize) -> i32 {
-    let mut left_sum = 0_u32;
-    let mut right_sum = 0_u32;
+fn cell_correlation(image: &Bmp, origin_x: usize, origin_y: usize, mask: u16) -> i32 {
+    let mut positive_sum = 0_u32;
+    let mut negative_sum = 0_u32;
 
-    for y in origin_y..origin_y + CELL_SIZE {
-        for x in origin_x..origin_x + HALF_CELL {
-            left_sum += image.luminance(x, y);
-        }
+    for local_y in 0..CELL_SIZE {
+        for local_x in 0..CELL_SIZE {
+            let block_x = local_x / BLOCK_SIZE;
+            let block_y = local_y / BLOCK_SIZE;
+            let block_index = block_y * BLOCKS_PER_SIDE + block_x;
+            let luminance = image.luminance(origin_x + local_x, origin_y + local_y);
 
-        for x in origin_x + HALF_CELL..origin_x + CELL_SIZE {
-            right_sum += image.luminance(x, y);
+            if mask & (1_u16 << block_index) != 0 {
+                positive_sum += luminance;
+            } else {
+                negative_sum += luminance;
+            }
         }
     }
 
-    let pixels_per_half = (HALF_CELL * CELL_SIZE) as u32;
-    let left_average = left_sum / pixels_per_half;
-    let right_average = right_sum / pixels_per_half;
+    let pixels_per_group = (CELL_SIZE * CELL_SIZE / 2) as u32;
+    let positive_average = positive_sum / pixels_per_group;
+    let negative_average = negative_sum / pixels_per_group;
 
-    left_average as i32 - right_average as i32
+    positive_average as i32 - negative_average as i32
+}
+
+fn carrier_mask(cell_index: usize) -> u16 {
+    let mut order = [0_usize; BLOCK_COUNT];
+
+    for (index, slot) in order.iter_mut().enumerate() {
+        *slot = index;
+    }
+
+    let mut state = (cell_index as u64)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add(0xd1b5_4a32_d192_ed03);
+
+    for upper in (1..BLOCK_COUNT).rev() {
+        let swap_index = (next_random(&mut state) as usize) % (upper + 1);
+        order.swap(upper, swap_index);
+    }
+
+    let mut mask = 0_u16;
+
+    for &block_index in &order[..BLOCK_COUNT / 2] {
+        mask |= 1_u16 << block_index;
+    }
+
+    mask
+}
+
+fn next_random(state: &mut u64) -> u64 {
+    let mut value = *state;
+
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+
+    *state = value;
+
+    value
 }
 
 fn quantization_target(difference: i32, bit: bool) -> i32 {
@@ -194,28 +240,35 @@ fn decode_difference(difference: i32) -> bool {
     nearest_bucket(difference).rem_euclid(2) != 0
 }
 
-fn adjust_half(image: &mut Bmp, origin_x: usize, origin_y: usize, left_half: bool, delta: i16) {
-    let start_x = if left_half {
-        origin_x
-    } else {
-        origin_x + HALF_CELL
-    };
+fn adjust_pattern(image: &mut Bmp, origin_x: usize, origin_y: usize, mask: u16, direction: i16) {
+    for local_y in 0..CELL_SIZE {
+        for local_x in 0..CELL_SIZE {
+            let block_x = local_x / BLOCK_SIZE;
+            let block_y = local_y / BLOCK_SIZE;
+            let block_index = block_y * BLOCKS_PER_SIDE + block_x;
 
-    for y in origin_y..origin_y + CELL_SIZE {
-        for x in start_x..start_x + HALF_CELL {
-            image.adjust_pixel(x, y, delta);
+            let delta = if mask & (1_u16 << block_index) != 0 {
+                direction
+            } else {
+                -direction
+            };
+
+            image.adjust_pixel(origin_x + local_x, origin_y + local_y, delta);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{QUANTIZATION_STEP, decode_difference, embed, extract_bytes, quantization_target};
+    use super::{
+        BLOCK_COUNT, QUANTIZATION_STEP, carrier_mask, decode_difference, embed, extract_bytes,
+        quantization_target,
+    };
     use crate::bmp::Bmp;
 
     #[test]
     fn carrier_roundtrip_recovers_exact_bytes() {
-        let mut image = Bmp::test_image(64, 64);
+        let mut image = Bmp::test_image(128, 128);
         let payload = [0x00, 0x55, 0xaa, 0xff, 0x42, 0x19, 0x81, 0x7e];
 
         embed(&mut image, &payload).expect("embedding should succeed");
@@ -223,6 +276,16 @@ mod tests {
         let recovered = extract_bytes(&image, payload.len()).expect("extraction should succeed");
 
         assert_eq!(recovered, payload.to_vec());
+    }
+
+    #[test]
+    fn carrier_masks_are_balanced() {
+        for cell_index in 0..512 {
+            assert_eq!(
+                carrier_mask(cell_index).count_ones(),
+                (BLOCK_COUNT / 2) as u32
+            );
+        }
     }
 
     #[test]

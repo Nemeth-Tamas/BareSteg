@@ -74,9 +74,9 @@ margin in the current raw carrier.
 - [x] Bound required luminance-difference movement to one quantization step
 - [x] Preserve deterministic whole-image cell permutation
 - [x] Add exhaustive quantization target tests
-- [ ] Verify exact payload roundtrip with quantized carrier
-- [ ] Visually compare quantized carrier against previous carrier
-- [ ] Commit and push quantized carrier implementation
+- [x] Verify exact payload roundtrip with quantized carrier
+- [x] Visually compare quantized carrier against previous carrier
+- [x] Commit and push quantized carrier implementation
 
 The QIM carrier encodes bits using alternating luminance-difference buckets
 rather than requiring a particular positive or negative sign.
