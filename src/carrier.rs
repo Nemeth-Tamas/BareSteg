@@ -1,8 +1,8 @@
 use crate::bmp::Bmp;
 
-const CELL_SIZE: usize = 16;
-const BLOCK_SIZE: usize = 4;
-const BLOCKS_PER_SIDE: usize = CELL_SIZE / BLOCK_SIZE;
+const GRID_COLUMNS: usize = 80;
+const GRID_ROWS: usize = 80;
+const BLOCKS_PER_SIDE: usize = 4;
 const BLOCK_COUNT: usize = BLOCKS_PER_SIDE * BLOCKS_PER_SIDE;
 const QUANTIZATION_STEP: i32 = 8;
 const ADJUSTMENT_STEP: i16 = 1;
@@ -46,6 +46,17 @@ pub fn extract_bytes(image: &Bmp, byte_count: usize) -> Result<Vec<u8>, String> 
 }
 
 fn ensure_capacity(image: &Bmp, required_bits: usize) -> Result<(), String> {
+    let minimum_width = GRID_COLUMNS * BLOCKS_PER_SIDE;
+    let minimum_height = GRID_ROWS * BLOCKS_PER_SIDE;
+
+    if image.width() < minimum_width || image.height() < minimum_height {
+        return Err(format!(
+            "carrier is too small for normalized layout: image is {}x{}, need at least {minimum_width}x{minimum_height}",
+            image.width(),
+            image.height()
+        ));
+    }
+
     let available_bits = capacity_bits(image);
 
     if required_bits > available_bits {
@@ -57,18 +68,18 @@ fn ensure_capacity(image: &Bmp, required_bits: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn capacity_bits(image: &Bmp) -> usize {
-    (image.width() / CELL_SIZE) * (image.height() / CELL_SIZE)
+fn capacity_bits(_: &Bmp) -> usize {
+    GRID_COLUMNS * GRID_ROWS
 }
 
 fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), String> {
-    let (origin_x, origin_y) = cell_origin(image, cell_index);
+    let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
-    let initial_correlation = cell_correlation(image, origin_x, origin_y, mask);
+    let initial_correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
     let target = quantization_target(initial_correlation, bit);
 
     for _ in 0..MAX_ADJUSTMENT_PASSES {
-        let correlation = cell_correlation(image, origin_x, origin_y, mask);
+        let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
         let error = target - correlation;
 
         if error.abs() <= 1 {
@@ -81,7 +92,7 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
             -ADJUSTMENT_STEP
         };
 
-        adjust_pattern(image, origin_x, origin_y, mask, direction);
+        adjust_pattern(image, start_x, start_y, end_x, end_y, mask, direction);
     }
 
     Err(format!(
@@ -90,22 +101,25 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
 }
 
 fn read_cell_bit(image: &Bmp, cell_index: usize) -> bool {
-    let (origin_x, origin_y) = cell_origin(image, cell_index);
+    let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
-    let correlation = cell_correlation(image, origin_x, origin_y, mask);
+    let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
 
     decode_difference(correlation)
 }
 
-fn cell_origin(image: &Bmp, cell_index: usize) -> (usize, usize) {
-    let cells_per_row = image.width() / CELL_SIZE;
+fn cell_bounds(image: &Bmp, cell_index: usize) -> (usize, usize, usize, usize) {
     let total_cells = capacity_bits(image);
     let physical_index = permuted_cell_index(total_cells, cell_index);
+    let grid_x = physical_index % GRID_COLUMNS;
+    let grid_y = physical_index / GRID_COLUMNS;
 
-    (
-        (physical_index % cells_per_row) * CELL_SIZE,
-        (physical_index / cells_per_row) * CELL_SIZE,
-    )
+    let start_x = grid_x * image.width() / GRID_COLUMNS;
+    let end_x = (grid_x + 1) * image.width() / GRID_COLUMNS;
+    let start_y = grid_y * image.height() / GRID_ROWS;
+    let end_y = (grid_y + 1) * image.height() / GRID_ROWS;
+
+    (start_x, start_y, end_x, end_y)
 }
 
 fn permuted_cell_index(total_cells: usize, logical_index: usize) -> usize {
@@ -145,28 +159,43 @@ fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
     left
 }
 
-fn cell_correlation(image: &Bmp, origin_x: usize, origin_y: usize, mask: u16) -> i32 {
-    let mut positive_sum = 0_u32;
-    let mut negative_sum = 0_u32;
+fn cell_correlation(
+    image: &Bmp,
+    start_x: usize,
+    start_y: usize,
+    end_x: usize,
+    end_y: usize,
+    mask: u16,
+) -> i32 {
+    let width = end_x - start_x;
+    let height = end_y - start_y;
 
-    for local_y in 0..CELL_SIZE {
-        for local_x in 0..CELL_SIZE {
-            let block_x = local_x / BLOCK_SIZE;
-            let block_y = local_y / BLOCK_SIZE;
+    let mut positive_sum = 0_u64;
+    let mut negative_sum = 0_u64;
+    let mut positive_count = 0_u64;
+    let mut negative_count = 0_u64;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let local_x = x - start_x;
+            let local_y = y - start_y;
+            let block_x = local_x * BLOCKS_PER_SIDE / width;
+            let block_y = local_y * BLOCKS_PER_SIDE / height;
             let block_index = block_y * BLOCKS_PER_SIDE + block_x;
-            let luminance = image.luminance(origin_x + local_x, origin_y + local_y);
+            let luminance = u64::from(image.luminance(x, y));
 
             if mask & (1_u16 << block_index) != 0 {
                 positive_sum += luminance;
+                positive_count += 1;
             } else {
                 negative_sum += luminance;
+                negative_count += 1;
             }
         }
     }
 
-    let pixels_per_group = (CELL_SIZE * CELL_SIZE / 2) as u32;
-    let positive_average = positive_sum / pixels_per_group;
-    let negative_average = negative_sum / pixels_per_group;
+    let positive_average = positive_sum / positive_count;
+    let negative_average = negative_sum / negative_count;
 
     positive_average as i32 - negative_average as i32
 }
@@ -240,11 +269,24 @@ fn decode_difference(difference: i32) -> bool {
     nearest_bucket(difference).rem_euclid(2) != 0
 }
 
-fn adjust_pattern(image: &mut Bmp, origin_x: usize, origin_y: usize, mask: u16, direction: i16) {
-    for local_y in 0..CELL_SIZE {
-        for local_x in 0..CELL_SIZE {
-            let block_x = local_x / BLOCK_SIZE;
-            let block_y = local_y / BLOCK_SIZE;
+fn adjust_pattern(
+    image: &mut Bmp,
+    start_x: usize,
+    start_y: usize,
+    end_x: usize,
+    end_y: usize,
+    mask: u16,
+    direction: i16,
+) {
+    let width = end_x - start_x;
+    let height = end_y - start_y;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let local_x = x - start_x;
+            let local_y = y - start_y;
+            let block_x = local_x * BLOCKS_PER_SIDE / width;
+            let block_y = local_y * BLOCKS_PER_SIDE / height;
             let block_index = block_y * BLOCKS_PER_SIDE + block_x;
 
             let delta = if mask & (1_u16 << block_index) != 0 {
@@ -253,7 +295,7 @@ fn adjust_pattern(image: &mut Bmp, origin_x: usize, origin_y: usize, mask: u16, 
                 -direction
             };
 
-            image.adjust_pixel(origin_x + local_x, origin_y + local_y, delta);
+            image.adjust_pixel(x, y, delta);
         }
     }
 }
@@ -261,14 +303,14 @@ fn adjust_pattern(image: &mut Bmp, origin_x: usize, origin_y: usize, mask: u16, 
 #[cfg(test)]
 mod tests {
     use super::{
-        BLOCK_COUNT, QUANTIZATION_STEP, carrier_mask, decode_difference, embed, extract_bytes,
-        quantization_target,
+        BLOCK_COUNT, QUANTIZATION_STEP, carrier_mask, cell_bounds, decode_difference, embed,
+        extract_bytes, quantization_target,
     };
     use crate::bmp::Bmp;
 
     #[test]
     fn carrier_roundtrip_recovers_exact_bytes() {
-        let mut image = Bmp::test_image(128, 128);
+        let mut image = Bmp::test_image(640, 480);
         let payload = [0x00, 0x55, 0xaa, 0xff, 0x42, 0x19, 0x81, 0x7e];
 
         embed(&mut image, &payload).expect("embedding should succeed");
@@ -276,6 +318,22 @@ mod tests {
         let recovered = extract_bytes(&image, payload.len()).expect("extraction should succeed");
 
         assert_eq!(recovered, payload.to_vec());
+    }
+
+    #[test]
+    fn normalized_cell_bounds_scale_with_image() {
+        let small = Bmp::test_image(640, 480);
+        let large = Bmp::test_image(1280, 960);
+
+        for cell_index in [0, 1, 317, 2048, 6399] {
+            let small_bounds = cell_bounds(&small, cell_index);
+            let large_bounds = cell_bounds(&large, cell_index);
+
+            assert_eq!(large_bounds.0, small_bounds.0 * 2);
+            assert_eq!(large_bounds.1, small_bounds.1 * 2);
+            assert_eq!(large_bounds.2, small_bounds.2 * 2);
+            assert_eq!(large_bounds.3, small_bounds.3 * 2);
+        }
     }
 
     #[test]
