@@ -250,9 +250,9 @@ Create a repeatable manual corpus:
 - [ ] BareSteg output image
 - [ ] image uploaded through Messenger
 - [ ] downloaded Messenger result
-- [ ] BareSteg decode result
-- [ ] recovered payload comparison
-- [ ] record image dimensions before/after
+- [x] BareSteg decode result
+- [x] recovered payload comparison
+- [x] record image dimensions before/after
 - [ ] record file format before/after
 - [ ] record file size before/after
 - [ ] record carrier bit error rate where measurable
