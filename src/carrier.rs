@@ -1,7 +1,7 @@
 use crate::bmp::Bmp;
 
 const GRID_COLUMNS: usize = 80;
-const GRID_ROWS: usize = 80;
+const GRID_ROWS: usize = 40;
 const BLOCKS_PER_SIDE: usize = 4;
 const BLOCK_COUNT: usize = BLOCKS_PER_SIDE * BLOCKS_PER_SIDE;
 const QUANTIZATION_STEP: i32 = 8;
@@ -341,7 +341,7 @@ mod tests {
         let small = Bmp::test_image(640, 480);
         let large = Bmp::test_image(1280, 960);
 
-        for cell_index in [0, 1, 317, 2048, 6399] {
+        for cell_index in [0, 1, 317, 2048, 3199] {
             let small_bounds = cell_bounds(&small, cell_index);
             let large_bounds = cell_bounds(&large, cell_index);
 
