@@ -176,12 +176,12 @@ chance of surviving later lossy image processing.
 
 Initial direction:
 
-- [ ] divide usable image area into logical cells
-- [ ] encode one logical bit using a relative luminance relationship inside
+- [x] divide usable image area into logical cells
+- [x] encode one logical bit using a relative luminance relationship inside
       each cell
-- [ ] encode `0` and `1` using opposite luminance relationships
-- [ ] decode based on relative measurements rather than exact RGB values
-- [ ] keep modifications bounded to valid channel values
+- [x] encode `0` and `1` using opposite luminance relationships
+- [x] decode based on relative measurements rather than exact RGB values
+- [x] keep modifications bounded to valid channel values
 - [ ] reserve room around image boundaries if useful for later resizing
       tolerance
 
