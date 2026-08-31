@@ -54,23 +54,11 @@ pub fn encoded_frame_len(header_len: usize, payload_len: usize) -> Result<usize,
         .ok_or_else(|| "ECC frame size overflowed this platform".to_string())
 }
 
-pub fn decode_header(encoded_header: &[u8], header_len: usize) -> Result<Vec<u8>, String> {
-    decode_header_with_stats(encoded_header, header_len).map(|(header, _)| header)
-}
-
 pub fn decode_header_with_stats(
     encoded_header: &[u8],
     header_len: usize,
 ) -> Result<(Vec<u8>, DecodeStats), String> {
     decode_repeated_with_stats(encoded_header, header_len, HEADER_REPETITIONS)
-}
-
-pub fn decode_frame(
-    encoded_frame: &[u8],
-    header_len: usize,
-    payload_len: usize,
-) -> Result<Vec<u8>, String> {
-    decode_frame_with_stats(encoded_frame, header_len, payload_len).map(|(frame, _)| frame)
 }
 
 pub fn decode_frame_with_stats(
@@ -139,14 +127,6 @@ fn encode_repeated(data: &[u8], repetitions: usize) -> Result<Vec<u8>, String> {
     }
 
     Ok(encoded)
-}
-
-fn decode_repeated(
-    encoded: &[u8],
-    source_len: usize,
-    repetitions: usize,
-) -> Result<Vec<u8>, String> {
-    decode_repeated_with_stats(encoded, source_len, repetitions).map(|(decoded, _)| decoded)
 }
 
 fn decode_repeated_with_stats(
@@ -220,7 +200,7 @@ fn set_bit(bytes: &mut [u8], bit_index: usize) {
 #[cfg(test)]
 mod tests {
     use super::{
-        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame, decode_header, decode_repeated,
+        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_with_stats, decode_header_with_stats,
         decode_repeated_with_stats, encode_frame, encode_repeated, encoded_header_len,
     };
 
@@ -229,7 +209,7 @@ mod tests {
         let data = b"BareSteg ECC test\x00\x55\xaa\xff";
         let encoded = encode_repeated(data, PAYLOAD_REPETITIONS).expect("encoding should succeed");
 
-        let decoded = decode_repeated(&encoded, data.len(), PAYLOAD_REPETITIONS)
+        let (decoded, _) = decode_repeated_with_stats(&encoded, data.len(), PAYLOAD_REPETITIONS)
             .expect("decoding should succeed");
 
         assert_eq!(decoded, data.to_vec());
@@ -271,8 +251,9 @@ mod tests {
 
         assert_eq!(header_encoded_len, header.len() * HEADER_REPETITIONS);
 
-        let recovered_header = decode_header(&encoded[..header_encoded_len], header.len())
-            .expect("header should decode independently");
+        let (recovered_header, _) =
+            decode_header_with_stats(&encoded[..header_encoded_len], header.len())
+                .expect("header should decode independently");
 
         assert_eq!(recovered_header, header.to_vec());
     }
@@ -292,7 +273,7 @@ mod tests {
             header.len() * HEADER_REPETITIONS + payload.len() * PAYLOAD_REPETITIONS
         );
 
-        let decoded = decode_frame(&encoded, header.len(), payload.len())
+        let (decoded, _) = decode_frame_with_stats(&encoded, header.len(), payload.len())
             .expect("protected frame should decode");
 
         assert_eq!(decoded, frame);

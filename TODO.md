@@ -231,7 +231,7 @@ After exact BMP roundtrip works:
 
 Start simple and measure before implementing anything huge.
 
-- [ ] characterize actual carrier bit errors
+- [x] characterize actual carrier bit errors
 - [x] implement repetition coding
 - [x] implement interleaving
 - [ ] evaluate Hamming-style coding
