@@ -67,6 +67,26 @@ pub fn repair_payload_len(header: &mut [u8], payload_len: usize) -> Result<usize
     Ok(repaired_bits)
 }
 
+pub fn repair_payload_crc(header: &mut [u8], payload: &[u8]) -> Result<usize, String> {
+    if header.len() < HEADER_LEN {
+        return Err(format!(
+            "BareSteg frame is too short: need at least {HEADER_LEN} bytes"
+        ));
+    }
+
+    let encoded_crc = crc32::compute(payload).to_le_bytes();
+    let mut repaired_bits = 0_usize;
+
+    for (offset, expected) in encoded_crc.iter().enumerate() {
+        let index = 17 + offset;
+
+        repaired_bits += (header[index] ^ *expected).count_ones() as usize;
+        header[index] = *expected;
+    }
+
+    Ok(repaired_bits)
+}
+
 pub fn payload_len_from_header(header: &[u8]) -> Result<usize, String> {
     validate_header(header)?;
 
@@ -133,7 +153,7 @@ fn validate_header(frame: &[u8]) -> Result<(), String> {
 mod tests {
     use super::{
         HEADER_LEN, decode, encode, payload_len_from_header, repair_header_identity,
-        repair_payload_len,
+        repair_payload_crc, repair_payload_len,
     };
 
     #[test]
@@ -184,6 +204,24 @@ mod tests {
             payload_len_from_header(&frame[..HEADER_LEN])
                 .expect("repaired payload length should decode"),
             7
+        );
+    }
+
+    #[test]
+    fn known_payload_crc_can_be_repaired() {
+        let payload = b"payload";
+        let mut frame = encode(payload).expect("encoding should succeed");
+
+        frame[17] ^= 0x01;
+        frame[19] ^= 0x20;
+
+        let repaired_bits =
+            repair_payload_crc(&mut frame, payload).expect("payload CRC repair should succeed");
+
+        assert_eq!(repaired_bits, 2);
+        assert_eq!(
+            decode(&frame).expect("repaired CRC should validate"),
+            payload.to_vec()
         );
     }
 

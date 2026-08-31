@@ -220,7 +220,7 @@ try {
             $qimStep = [int]$Matches[1]
         }
 
-        if ($rawOutput -match "Header identity repairs: (\d+) bit") {
+        if ($rawOutput -match "Header repairs: (\d+) bit") {
             $headerRepairs = [int]$Matches[1]
         }
 
@@ -250,6 +250,10 @@ try {
             $exitCode -eq 0 -and
             (Test-BytesEqual $payloadPath $recovered)
         )
+
+        if ($exitCode -eq 0 -and -not $matches) {
+            $errorText = "reveal returned success but recovered bytes differ"
+        }
 
         $status = if ($matches) {
             "PASS"

@@ -8,8 +8,10 @@ use std::{env, fs, process};
 
 use bmp::Bmp;
 
-const DECODE_QUANTIZATION_STEPS: [i32; 12] = [8, 7, 6, 5, 4, 3, 2, 1, 9, 10, 11, 12];
-const MAX_PAYLOAD_LENGTH_REPAIRS: usize = 8;
+const DECODE_QUANTIZATION_STEPS: [i32; 12] = [8, 9, 7, 10, 6, 11, 5, 12, 4, 3, 2, 1];
+const MAX_HEADER_IDENTITY_REPAIRS: usize = 8;
+const MAX_PAYLOAD_LENGTH_REPAIRS: usize = 4;
+const MAX_PAYLOAD_CRC_REPAIRS: usize = 4;
 
 fn main() {
     if let Err(error) = run() {
@@ -61,7 +63,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
         match recover_with_quantization_step(&image, quantization_step) {
             Ok((payload, header_stats, recovery_stats, header_repairs)) => {
                 println!("QIM decode step: {quantization_step}");
-                println!("Header identity repairs: {header_repairs} bit(s)");
+                println!("Header repairs: {header_repairs} bit(s)");
 
                 println!(
                     "Header ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
@@ -108,14 +110,24 @@ fn recover_with_quantization_step(
     image: &Bmp,
     quantization_step: i32,
 ) -> Result<(Vec<u8>, ecc::DecodeStats, ecc::DecodeStats, usize), String> {
+    let protected_capacity = carrier::capacity_bytes(image);
+    let protected_carrier = carrier::extract_bytes(image, protected_capacity, quantization_step)?;
+
     let protected_header_len = ecc::encoded_header_len(frame::HEADER_LEN)?;
-    let protected_header = carrier::extract_bytes(image, protected_header_len, quantization_step)?;
+    let protected_header = protected_carrier
+        .get(..protected_header_len)
+        .ok_or_else(|| "carrier is too small for the protected BareSteg header".to_string())?;
 
     let (mut header, header_stats) =
-        ecc::decode_header_with_stats(&protected_header, frame::HEADER_LEN)?;
+        ecc::decode_header_with_stats(protected_header, frame::HEADER_LEN)?;
 
     let identity_repairs = frame::repair_header_identity(&mut header)?;
-    let protected_capacity = carrier::capacity_bytes(image);
+
+    if identity_repairs > MAX_HEADER_IDENTITY_REPAIRS {
+        return Err(format!(
+            "BareSteg header identity required {identity_repairs} repaired bits; maximum allowed is {MAX_HEADER_IDENTITY_REPAIRS}"
+        ));
+    }
 
     let mut candidates = Vec::new();
     let mut payload_len = 0_usize;
@@ -149,33 +161,40 @@ fn recover_with_quantization_step(
     let mut last_error = None;
 
     for (length_repairs, payload_len, protected_frame_len, candidate_header) in candidates {
-        let protected_frame =
-            carrier::extract_bytes(image, protected_frame_len, quantization_step)?;
+        let protected_frame = &protected_carrier[..protected_frame_len];
 
         let (mut recovered_frame, recovery_stats) =
-            ecc::decode_frame_with_stats(&protected_frame, frame::HEADER_LEN, payload_len)?;
+            ecc::decode_frame_with_stats(protected_frame, frame::HEADER_LEN, payload_len)?;
 
-        recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
+        let crc_repairs = {
+            let (recovered_header, recovered_payload) =
+                recovered_frame.split_at_mut(frame::HEADER_LEN);
 
-        match frame::decode(&recovered_frame) {
-            Ok(payload) => {
-                return Ok((
-                    payload,
-                    header_stats,
-                    recovery_stats,
-                    identity_repairs + length_repairs,
-                ));
-            }
-            Err(error) => {
-                last_error = Some(error);
-            }
+            recovered_header.copy_from_slice(&candidate_header);
+
+            frame::repair_payload_crc(recovered_header, recovered_payload)?
+        };
+
+        if crc_repairs > MAX_PAYLOAD_CRC_REPAIRS {
+            last_error = Some(format!(
+                "payload CRC required {crc_repairs} repaired bits; maximum allowed is {MAX_PAYLOAD_CRC_REPAIRS}"
+            ));
+
+            continue;
         }
+
+        let payload = frame::decode(&recovered_frame)?;
+
+        return Ok((
+            payload,
+            header_stats,
+            recovery_stats,
+            identity_repairs + length_repairs + crc_repairs,
+        ));
     }
 
     Err(last_error.unwrap_or_else(|| {
-        format!(
-            "no payload length candidate survived within {MAX_PAYLOAD_LENGTH_REPAIRS} repaired header bits"
-        )
+        format!("no payload candidate survived bounded identity, length, and CRC repair")
     }))
 }
 
