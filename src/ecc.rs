@@ -177,6 +177,72 @@ pub fn decode_frame_with_stats(
     Ok((frame, header_stats.combined(payload_stats)))
 }
 
+pub fn decode_frame_candidates_with_stats(
+    encoded_frame: &[u8],
+    header_len: usize,
+    payload_len: usize,
+) -> Result<Vec<(Vec<u8>, DecodeStats, usize)>, String> {
+    let encoded_header_len = encoded_header_len(header_len)?;
+    let expected_len = encoded_frame_len(header_len, payload_len)?;
+
+    if encoded_frame.len() != expected_len {
+        return Err(format!(
+            "ECC frame length mismatch: expected {expected_len} bytes, recovered {}",
+            encoded_frame.len()
+        ));
+    }
+
+    let (header, header_stats) = decode_repeated_with_stats(
+        &encoded_frame[..encoded_header_len],
+        header_len,
+        HEADER_REPETITIONS,
+    )?;
+
+    let encoded_payload = &encoded_frame[encoded_header_len..];
+
+    let (majority_payload, majority_stats) =
+        decode_repeated_with_stats(encoded_payload, payload_len, PAYLOAD_REPETITIONS)?;
+
+    let mut payload_candidates = vec![(majority_payload, majority_stats, PAYLOAD_REPETITIONS)];
+
+    for repetition in 0..PAYLOAD_REPETITIONS {
+        let copy_mask = 1_u64 << repetition;
+
+        let (payload, stats) = decode_repeated_copy_mask_with_stats(
+            encoded_payload,
+            payload_len,
+            PAYLOAD_REPETITIONS,
+            copy_mask,
+        )?;
+
+        if payload_candidates
+            .iter()
+            .any(|(existing, _, _)| existing == &payload)
+        {
+            continue;
+        }
+
+        payload_candidates.push((payload, stats, 1));
+    }
+
+    let mut frame_candidates = Vec::with_capacity(payload_candidates.len());
+
+    for (payload, payload_stats, copies_used) in payload_candidates {
+        let mut frame = Vec::with_capacity(
+            header_len
+                .checked_add(payload_len)
+                .ok_or_else(|| "decoded frame size overflowed this platform".to_string())?,
+        );
+
+        frame.extend_from_slice(&header);
+        frame.extend_from_slice(&payload);
+
+        frame_candidates.push((frame, header_stats.combined(payload_stats), copies_used));
+    }
+
+    Ok(frame_candidates)
+}
+
 fn encoded_len(source_len: usize, repetitions: usize) -> Result<usize, String> {
     source_len
         .checked_mul(repetitions)
@@ -303,9 +369,10 @@ fn set_bit(bytes: &mut [u8], bit_index: usize) {
 #[cfg(test)]
 mod tests {
     use super::{
-        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_with_stats,
-        decode_header_candidates_with_stats, decode_header_with_stats, decode_repeated_with_stats,
-        encode_frame, encode_repeated, encoded_header_len, header_single_copy_candidates,
+        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_candidates_with_stats,
+        decode_frame_with_stats, decode_header_candidates_with_stats, decode_header_with_stats,
+        decode_repeated_with_stats, encode_frame, encode_repeated, encoded_header_len,
+        header_single_copy_candidates,
     };
 
     #[test]
@@ -411,6 +478,41 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate[17] != header[17])
         );
+    }
+
+    #[test]
+    fn payload_candidates_can_recover_when_three_copy_majority_is_wrong() {
+        let header = [0x42_u8; 21];
+        let payload = [0x81_u8; 31];
+        let mut frame = header.to_vec();
+
+        frame.extend_from_slice(&payload);
+
+        let mut encoded =
+            encode_frame(&frame, header.len()).expect("frame encoding should succeed");
+
+        let payload_start = header.len() * HEADER_REPETITIONS;
+
+        for repetition in [1_usize, 2] {
+            let start = payload_start + repetition * payload.len();
+            let end = start + payload.len();
+
+            for byte in &mut encoded[start..end] {
+                *byte ^= 0xff;
+            }
+        }
+
+        let (majority_frame, _) = decode_frame_with_stats(&encoded, header.len(), payload.len())
+            .expect("majority frame decoding should succeed");
+
+        assert_ne!(&majority_frame[header.len()..], payload);
+
+        let candidates = decode_frame_candidates_with_stats(&encoded, header.len(), payload.len())
+            .expect("payload candidate decoding should succeed");
+
+        assert!(candidates.iter().any(|(candidate, _, copies_used)| {
+            &candidate[header.len()..] == payload && *copies_used == 1
+        }));
     }
 
     #[test]

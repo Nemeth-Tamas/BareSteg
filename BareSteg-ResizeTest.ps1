@@ -213,6 +213,7 @@ try {
         $weighting = $null
         $headerCopies = $null
         $headerCrcCopies = $null
+        $payloadCopies = $null
         $headerRepairs = $null
         $headerMinority = $null
         $headerDisputed = $null
@@ -233,6 +234,10 @@ try {
 
         if ($rawOutput -match "Header CRC copies used: (\d+)") {
             $headerCrcCopies = [int]$Matches[1]
+        }
+
+        if ($rawOutput -match "Payload copies used: (\d+)") {
+            $payloadCopies = [int]$Matches[1]
         }
 
         if ($rawOutput -match "Header repairs: (\d+) bit") {
@@ -285,6 +290,7 @@ try {
             Weighting = $weighting
             HeaderCopies = $headerCopies
             HeaderCrcCopies = $headerCrcCopies
+            PayloadCopies = $payloadCopies
             HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
@@ -307,6 +313,7 @@ try {
             Weighting,
             HeaderCopies,
             HeaderCrcCopies,
+            PayloadCopies,
             HeaderRepairs,
             HeaderMinority,
             HeaderDisputed,

@@ -12,6 +12,16 @@ const DECODE_QUANTIZATION_STEPS: [i32; 12] = [8, 9, 7, 10, 6, 11, 5, 12, 4, 3, 2
 const MAX_HEADER_IDENTITY_REPAIRS: usize = 8;
 const MAX_PAYLOAD_LENGTH_REPAIRS: usize = 4;
 
+type RecoveryResult = (
+    Vec<u8>,
+    ecc::DecodeStats,
+    ecc::DecodeStats,
+    usize,
+    usize,
+    usize,
+    usize,
+);
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("BareSteg error: {error}");
@@ -68,6 +78,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                     header_repairs,
                     header_copies,
                     crc_copies,
+                    payload_copies,
                 )) => {
                     println!("QIM decode step: {quantization_step}");
                     println!(
@@ -80,6 +91,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                     );
                     println!("Header copies used: {header_copies}");
                     println!("Header CRC copies used: {crc_copies}");
+                    println!("Payload copies used: {payload_copies}");
                     println!("Header repairs: {header_repairs} bit(s)");
 
                     println!(
@@ -128,17 +140,7 @@ fn recover_with_quantization_step(
     image: &Bmp,
     quantization_step: i32,
     pixel_weighted: bool,
-) -> Result<
-    (
-        Vec<u8>,
-        ecc::DecodeStats,
-        ecc::DecodeStats,
-        usize,
-        usize,
-        usize,
-    ),
-    String,
-> {
+) -> Result<RecoveryResult, String> {
     let protected_capacity = carrier::capacity_bytes(image);
 
     let protected_carrier = if pixel_weighted {
@@ -229,27 +231,33 @@ fn recover_with_quantization_step(
         {
             let protected_frame = &protected_carrier[..protected_frame_len];
 
-            let (mut recovered_frame, recovery_stats) =
-                ecc::decode_frame_with_stats(protected_frame, frame::HEADER_LEN, payload_len)?;
+            let frame_candidates = ecc::decode_frame_candidates_with_stats(
+                protected_frame,
+                frame::HEADER_LEN,
+                payload_len,
+            )?;
 
-            recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
+            for (mut recovered_frame, recovery_stats, payload_copies) in frame_candidates {
+                recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
 
-            for (crc, crc_copies) in &crc_candidates {
-                recovered_frame[17..21].copy_from_slice(crc);
+                for (crc, crc_copies) in &crc_candidates {
+                    recovered_frame[17..21].copy_from_slice(crc);
 
-                match frame::decode(&recovered_frame) {
-                    Ok(payload) => {
-                        return Ok((
-                            payload,
-                            header_stats,
-                            recovery_stats,
-                            identity_repairs + length_repairs,
-                            header_copies,
-                            *crc_copies,
-                        ));
-                    }
-                    Err(error) => {
-                        last_error = Some(error);
+                    match frame::decode(&recovered_frame) {
+                        Ok(payload) => {
+                            return Ok((
+                                payload,
+                                header_stats,
+                                recovery_stats,
+                                identity_repairs + length_repairs,
+                                header_copies,
+                                *crc_copies,
+                                payload_copies,
+                            ));
+                        }
+                        Err(error) => {
+                            last_error = Some(error);
+                        }
                     }
                 }
             }
