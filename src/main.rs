@@ -325,3 +325,41 @@ fn usage() -> String {
     ]
     .join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DECODE_QUANTIZATION_STEPS, recover_with_quantization_step};
+    use crate::{bmp::Bmp, carrier, ecc, frame};
+
+    #[test]
+    fn image_without_baresteg_data_is_rejected() {
+        let image = Bmp::test_image(640, 480);
+
+        for quantization_step in DECODE_QUANTIZATION_STEPS {
+            for pixel_weighted in [false, true] {
+                assert!(
+                    recover_with_quantization_step(&image, quantization_step, pixel_weighted,)
+                        .is_err(),
+                    "plain BMP unexpectedly decoded at QIM step {quantization_step} with pixel_weighted={pixel_weighted}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_payload_is_rejected_before_embedding() {
+        let payload = vec![0x5a_u8; 200];
+        let bare_frame = frame::encode(&payload).expect("frame encoding should succeed");
+        let protected_frame =
+            ecc::encode_frame(&bare_frame, frame::HEADER_LEN).expect("ECC encoding should succeed");
+
+        let mut image = Bmp::test_image(640, 480);
+
+        let error = match carrier::embed(&mut image, &protected_frame) {
+            Ok(()) => panic!("oversized payload should exceed carrier capacity"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("carrier is too small"));
+    }
+}

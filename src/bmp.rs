@@ -197,3 +197,48 @@ fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, String> {
 
     Ok(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Bmp;
+
+    #[test]
+    fn malformed_bmp_signature_is_rejected() {
+        let bytes = vec![0_u8; 54];
+
+        let error = match Bmp::from_bytes(bytes) {
+            Ok(_) => panic!("invalid BMP signature should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("expected Windows BMP signature"));
+    }
+
+    #[test]
+    fn unsupported_bmp_bit_depth_is_rejected() {
+        let mut bytes = Bmp::test_image(320, 160).bytes;
+
+        bytes[28..30].copy_from_slice(&32_u16.to_le_bytes());
+
+        let error = match Bmp::from_bytes(bytes) {
+            Ok(_) => panic!("unsupported BMP bit depth should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("unsupported BMP bit depth"));
+    }
+
+    #[test]
+    fn truncated_bmp_pixel_array_is_rejected() {
+        let mut bytes = Bmp::test_image(321, 161).bytes;
+
+        bytes.pop();
+
+        let error = match Bmp::from_bytes(bytes) {
+            Ok(_) => panic!("truncated BMP pixel array should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("BMP pixel array points outside the file"));
+    }
+}

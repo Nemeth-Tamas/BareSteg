@@ -204,9 +204,9 @@ All of these must work:
 - [x] payload bytes can be recovered
 - [x] CRC32 validates the recovered payload
 - [x] recovered file is byte-for-byte identical to the original payload
-- [ ] malformed images fail cleanly
-- [ ] images without BareSteg data fail cleanly
-- [ ] oversized payloads fail cleanly
+- [x] malformed images fail cleanly
+- [x] images without BareSteg data fail cleanly
+- [x] oversized payloads fail cleanly
 
 ## Milestone 2 - Carrier Robustness
 
@@ -376,11 +376,11 @@ Every implemented module should gain tests as practical.
 - [ ] CRC32 known-vector tests
 - [ ] frame encode/decode tests
 - [ ] malformed frame tests
-- [ ] BMP header parsing tests
+- [x] BMP header parsing tests
 - [ ] BMP row-padding tests
 - [ ] carrier bit roundtrip tests
 - [ ] payload roundtrip tests
-- [ ] insufficient-capacity tests
+- [x] insufficient-capacity tests
 - [ ] corruption tests
 - [ ] real Messenger regression corpus
 
