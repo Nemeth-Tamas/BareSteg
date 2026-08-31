@@ -1,6 +1,25 @@
 const HEADER_REPETITIONS: usize = 5;
 const PAYLOAD_REPETITIONS: usize = 3;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DecodeStats {
+    pub logical_bits: usize,
+    pub protected_votes: usize,
+    pub disputed_bits: usize,
+    pub minority_votes: usize,
+}
+
+impl DecodeStats {
+    fn combined(self, other: Self) -> Self {
+        Self {
+            logical_bits: self.logical_bits + other.logical_bits,
+            protected_votes: self.protected_votes + other.protected_votes,
+            disputed_bits: self.disputed_bits + other.disputed_bits,
+            minority_votes: self.minority_votes + other.minority_votes,
+        }
+    }
+}
+
 pub fn encode_frame(frame: &[u8], header_len: usize) -> Result<Vec<u8>, String> {
     if frame.len() < header_len {
         return Err(format!(
@@ -36,7 +55,14 @@ pub fn encoded_frame_len(header_len: usize, payload_len: usize) -> Result<usize,
 }
 
 pub fn decode_header(encoded_header: &[u8], header_len: usize) -> Result<Vec<u8>, String> {
-    decode_repeated(encoded_header, header_len, HEADER_REPETITIONS)
+    decode_header_with_stats(encoded_header, header_len).map(|(header, _)| header)
+}
+
+pub fn decode_header_with_stats(
+    encoded_header: &[u8],
+    header_len: usize,
+) -> Result<(Vec<u8>, DecodeStats), String> {
+    decode_repeated_with_stats(encoded_header, header_len, HEADER_REPETITIONS)
 }
 
 pub fn decode_frame(
@@ -44,6 +70,14 @@ pub fn decode_frame(
     header_len: usize,
     payload_len: usize,
 ) -> Result<Vec<u8>, String> {
+    decode_frame_with_stats(encoded_frame, header_len, payload_len).map(|(frame, _)| frame)
+}
+
+pub fn decode_frame_with_stats(
+    encoded_frame: &[u8],
+    header_len: usize,
+    payload_len: usize,
+) -> Result<(Vec<u8>, DecodeStats), String> {
     let encoded_header_len = encoded_header_len(header_len)?;
     let expected_len = encoded_frame_len(header_len, payload_len)?;
 
@@ -54,13 +88,13 @@ pub fn decode_frame(
         ));
     }
 
-    let header = decode_repeated(
+    let (header, header_stats) = decode_repeated_with_stats(
         &encoded_frame[..encoded_header_len],
         header_len,
         HEADER_REPETITIONS,
     )?;
 
-    let payload = decode_repeated(
+    let (payload, payload_stats) = decode_repeated_with_stats(
         &encoded_frame[encoded_header_len..],
         payload_len,
         PAYLOAD_REPETITIONS,
@@ -75,7 +109,7 @@ pub fn decode_frame(
     frame.extend_from_slice(&header);
     frame.extend_from_slice(&payload);
 
-    Ok(frame)
+    Ok((frame, header_stats.combined(payload_stats)))
 }
 
 fn encoded_len(source_len: usize, repetitions: usize) -> Result<usize, String> {
@@ -112,6 +146,14 @@ fn decode_repeated(
     source_len: usize,
     repetitions: usize,
 ) -> Result<Vec<u8>, String> {
+    decode_repeated_with_stats(encoded, source_len, repetitions).map(|(decoded, _)| decoded)
+}
+
+fn decode_repeated_with_stats(
+    encoded: &[u8],
+    source_len: usize,
+    repetitions: usize,
+) -> Result<(Vec<u8>, DecodeStats), String> {
     let expected_len = encoded_len(source_len, repetitions)?;
 
     if encoded.len() != expected_len {
@@ -125,7 +167,16 @@ fn decode_repeated(
         .checked_mul(8)
         .ok_or_else(|| "ECC source bit count overflowed this platform".to_string())?;
 
+    let protected_votes = source_bits
+        .checked_mul(repetitions)
+        .ok_or_else(|| "ECC protected vote count overflowed this platform".to_string())?;
+
     let mut decoded = vec![0_u8; source_len];
+    let mut stats = DecodeStats {
+        logical_bits: source_bits,
+        protected_votes,
+        ..DecodeStats::default()
+    };
 
     for bit_index in 0..source_bits {
         let mut one_votes = 0_usize;
@@ -140,12 +191,19 @@ fn decode_repeated(
             }
         }
 
+        let zero_votes = repetitions - one_votes;
+
+        if one_votes != 0 && zero_votes != 0 {
+            stats.disputed_bits += 1;
+            stats.minority_votes += one_votes.min(zero_votes);
+        }
+
         if one_votes > repetitions / 2 {
             set_bit(&mut decoded, bit_index);
         }
     }
 
-    Ok(decoded)
+    Ok((decoded, stats))
 }
 
 fn bit_at(bytes: &[u8], bit_index: usize) -> bool {
@@ -163,7 +221,7 @@ fn set_bit(bytes: &mut [u8], bit_index: usize) {
 mod tests {
     use super::{
         HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame, decode_header, decode_repeated,
-        encode_frame, encode_repeated, encoded_header_len,
+        decode_repeated_with_stats, encode_frame, encode_repeated, encoded_header_len,
     };
 
     #[test]
@@ -187,10 +245,17 @@ mod tests {
             *byte ^= 0xff;
         }
 
-        let decoded = decode_repeated(&encoded, data.len(), PAYLOAD_REPETITIONS)
-            .expect("majority decoding should succeed");
+        let (decoded, stats) =
+            decode_repeated_with_stats(&encoded, data.len(), PAYLOAD_REPETITIONS)
+                .expect("majority decoding should succeed");
+
+        let source_bits = data.len() * 8;
 
         assert_eq!(decoded, data.to_vec());
+        assert_eq!(stats.logical_bits, source_bits);
+        assert_eq!(stats.protected_votes, source_bits * PAYLOAD_REPETITIONS);
+        assert_eq!(stats.disputed_bits, source_bits);
+        assert_eq!(stats.minority_votes, source_bits);
     }
 
     #[test]

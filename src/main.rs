@@ -54,12 +54,31 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
     let image = Bmp::load(image_path)?;
     let protected_header_len = ecc::encoded_header_len(frame::HEADER_LEN)?;
     let protected_header = carrier::extract_bytes(&image, protected_header_len)?;
-    let header = ecc::decode_header(&protected_header, frame::HEADER_LEN)?;
+    let (header, header_stats) =
+        ecc::decode_header_with_stats(&protected_header, frame::HEADER_LEN)?;
+
+    println!(
+        "Header ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
+        header_stats.minority_votes,
+        header_stats.protected_votes,
+        header_stats.disputed_bits,
+        header_stats.logical_bits
+    );
+
     let payload_len = frame::payload_len_from_header(&header)?;
     let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
     let protected_frame = carrier::extract_bytes(&image, protected_frame_len)?;
-    let recovered_frame = ecc::decode_frame(&protected_frame, frame::HEADER_LEN, payload_len)?;
+    let (recovered_frame, recovery_stats) =
+        ecc::decode_frame_with_stats(&protected_frame, frame::HEADER_LEN, payload_len)?;
     let payload = frame::decode(&recovered_frame)?;
+
+    println!(
+        "ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
+        recovery_stats.minority_votes,
+        recovery_stats.protected_votes,
+        recovery_stats.disputed_bits,
+        recovery_stats.logical_bits
+    );
 
     fs::write(output_path, &payload)
         .map_err(|error| format!("failed to write recovered payload '{output_path}': {error}"))?;

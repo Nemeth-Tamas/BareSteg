@@ -217,7 +217,7 @@ After exact BMP roundtrip works:
 - [x] interleave repeated bits across distant image regions
 - [x] protect header more heavily than payload
 - [x] recover from isolated damaged carrier cells
-- [ ] expose useful corruption/recovery diagnostics
+- [x] expose useful corruption/recovery diagnostics
 
 ### Synchronization
 
