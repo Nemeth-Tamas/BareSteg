@@ -223,7 +223,7 @@ After exact BMP roundtrip works:
 
 - [ ] investigate repeated synchronization markers
 - [x] investigate normalized image-relative carrier positions
-- [ ] tolerate small dimension changes
+- [x] tolerate small dimension changes
 - [ ] tolerate image cropping where practical
 - [ ] tolerate moderate luminance/color shifts
 
