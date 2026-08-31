@@ -61,7 +61,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
     for quantization_step in DECODE_QUANTIZATION_STEPS {
         for pixel_weighted in [false, true] {
             match recover_with_quantization_step(&image, quantization_step, pixel_weighted) {
-                Ok((payload, header_stats, recovery_stats, header_repairs)) => {
+                Ok((payload, header_stats, recovery_stats, header_repairs, header_copies)) => {
                     println!("QIM decode step: {quantization_step}");
                     println!(
                         "Carrier weighting: {}",
@@ -71,6 +71,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                             "equal-block"
                         }
                     );
+                    println!("Header copies used: {header_copies}");
                     println!("Header repairs: {header_repairs} bit(s)");
 
                     println!(
@@ -119,7 +120,7 @@ fn recover_with_quantization_step(
     image: &Bmp,
     quantization_step: i32,
     pixel_weighted: bool,
-) -> Result<(Vec<u8>, ecc::DecodeStats, ecc::DecodeStats, usize), String> {
+) -> Result<(Vec<u8>, ecc::DecodeStats, ecc::DecodeStats, usize, usize), String> {
     let protected_capacity = carrier::capacity_bytes(image);
 
     let protected_carrier = if pixel_weighted {
@@ -134,74 +135,81 @@ fn recover_with_quantization_step(
         .get(..protected_header_len)
         .ok_or_else(|| "carrier is too small for the protected BareSteg header".to_string())?;
 
-    let (mut header, header_stats) =
-        ecc::decode_header_with_stats(protected_header, frame::HEADER_LEN)?;
-
-    let identity_repairs = frame::repair_header_identity(&mut header)?;
-
-    if identity_repairs > MAX_HEADER_IDENTITY_REPAIRS {
-        return Err(format!(
-            "BareSteg header identity required {identity_repairs} repaired bits; maximum allowed is {MAX_HEADER_IDENTITY_REPAIRS}"
-        ));
-    }
-
-    let mut candidates = Vec::new();
-    let mut payload_len = 0_usize;
-
-    loop {
-        let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
-
-        if protected_frame_len > protected_capacity {
-            break;
-        }
-
-        let mut candidate_header = header.clone();
-
-        let length_repairs = frame::repair_payload_len(&mut candidate_header, payload_len)?;
-
-        if length_repairs <= MAX_PAYLOAD_LENGTH_REPAIRS {
-            candidates.push((
-                length_repairs,
-                payload_len,
-                protected_frame_len,
-                candidate_header,
-            ));
-        }
-
-        payload_len = payload_len
-            .checked_add(1)
-            .ok_or_else(|| "payload length candidate overflowed this platform".to_string())?;
-    }
-
-    candidates.sort_by_key(|candidate| (candidate.0, candidate.1));
+    let header_candidates =
+        ecc::decode_header_candidates_with_stats(protected_header, frame::HEADER_LEN)?;
 
     let mut last_error = None;
 
-    for (length_repairs, payload_len, protected_frame_len, candidate_header) in candidates {
-        let protected_frame = &protected_carrier[..protected_frame_len];
+    for (mut header, header_stats, header_copies) in header_candidates {
+        let identity_repairs = frame::repair_header_identity(&mut header)?;
 
-        let (mut recovered_frame, recovery_stats) =
-            ecc::decode_frame_with_stats(protected_frame, frame::HEADER_LEN, payload_len)?;
+        if identity_repairs > MAX_HEADER_IDENTITY_REPAIRS {
+            last_error = Some(format!(
+                "BareSteg header identity required {identity_repairs} repaired bits; maximum allowed is {MAX_HEADER_IDENTITY_REPAIRS}"
+            ));
 
-        recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
+            continue;
+        }
 
-        match frame::decode(&recovered_frame) {
-            Ok(payload) => {
-                return Ok((
-                    payload,
-                    header_stats,
-                    recovery_stats,
-                    identity_repairs + length_repairs,
+        let mut length_candidates = Vec::new();
+        let mut payload_len = 0_usize;
+
+        loop {
+            let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
+
+            if protected_frame_len > protected_capacity {
+                break;
+            }
+
+            let mut candidate_header = header.clone();
+
+            let length_repairs = frame::repair_payload_len(&mut candidate_header, payload_len)?;
+
+            if length_repairs <= MAX_PAYLOAD_LENGTH_REPAIRS {
+                length_candidates.push((
+                    length_repairs,
+                    payload_len,
+                    protected_frame_len,
+                    candidate_header,
                 ));
             }
-            Err(error) => {
-                last_error = Some(error);
+
+            payload_len = payload_len
+                .checked_add(1)
+                .ok_or_else(|| "payload length candidate overflowed this platform".to_string())?;
+        }
+
+        length_candidates.sort_by_key(|candidate| (candidate.0, candidate.1));
+
+        for (length_repairs, payload_len, protected_frame_len, candidate_header) in
+            length_candidates
+        {
+            let protected_frame = &protected_carrier[..protected_frame_len];
+
+            let (mut recovered_frame, recovery_stats) =
+                ecc::decode_frame_with_stats(protected_frame, frame::HEADER_LEN, payload_len)?;
+
+            recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
+
+            match frame::decode(&recovered_frame) {
+                Ok(payload) => {
+                    return Ok((
+                        payload,
+                        header_stats,
+                        recovery_stats,
+                        identity_repairs + length_repairs,
+                        header_copies,
+                    ));
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                }
             }
         }
     }
 
     Err(last_error.unwrap_or_else(|| {
-        "no payload candidate survived bounded identity and length repair".to_string()
+        "no header-copy or payload-length candidate survived recovery".to_string()
     }))
 }
 

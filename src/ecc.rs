@@ -61,6 +61,57 @@ pub fn decode_header_with_stats(
     decode_repeated_with_stats(encoded_header, header_len, HEADER_REPETITIONS)
 }
 
+pub fn decode_header_candidates_with_stats(
+    encoded_header: &[u8],
+    header_len: usize,
+) -> Result<Vec<(Vec<u8>, DecodeStats, usize)>, String> {
+    let expected_len = encoded_len(header_len, HEADER_REPETITIONS)?;
+
+    if encoded_header.len() != expected_len {
+        return Err(format!(
+            "ECC header length mismatch: expected {expected_len} bytes, recovered {}",
+            encoded_header.len()
+        ));
+    }
+
+    let mut candidates = Vec::new();
+    let mut copies_used = HEADER_REPETITIONS;
+
+    while copies_used >= 3 {
+        let mask_limit = 1_u64 << HEADER_REPETITIONS;
+
+        for copy_mask in 1_u64..mask_limit {
+            if copy_mask.count_ones() as usize != copies_used {
+                continue;
+            }
+
+            let (header, stats) = decode_repeated_copy_mask_with_stats(
+                encoded_header,
+                header_len,
+                HEADER_REPETITIONS,
+                copy_mask,
+            )?;
+
+            if candidates
+                .iter()
+                .any(|(existing, _, _)| existing == &header)
+            {
+                continue;
+            }
+
+            candidates.push((header, stats, copies_used));
+        }
+
+        if copies_used < 5 {
+            break;
+        }
+
+        copies_used -= 2;
+    }
+
+    Ok(candidates)
+}
+
 pub fn decode_frame_with_stats(
     encoded_frame: &[u8],
     header_len: usize,
@@ -134,13 +185,34 @@ fn decode_repeated_with_stats(
     source_len: usize,
     repetitions: usize,
 ) -> Result<(Vec<u8>, DecodeStats), String> {
-    let expected_len = encoded_len(source_len, repetitions)?;
+    if repetitions >= u64::BITS as usize {
+        return Err("ECC repetition count exceeds decoder mask capacity".to_string());
+    }
+
+    let copy_mask = (1_u64 << repetitions) - 1;
+
+    decode_repeated_copy_mask_with_stats(encoded, source_len, repetitions, copy_mask)
+}
+
+fn decode_repeated_copy_mask_with_stats(
+    encoded: &[u8],
+    source_len: usize,
+    total_repetitions: usize,
+    copy_mask: u64,
+) -> Result<(Vec<u8>, DecodeStats), String> {
+    let expected_len = encoded_len(source_len, total_repetitions)?;
 
     if encoded.len() != expected_len {
         return Err(format!(
             "ECC block length mismatch: expected {expected_len} bytes, recovered {}",
             encoded.len()
         ));
+    }
+
+    let repetitions = copy_mask.count_ones() as usize;
+
+    if repetitions == 0 || repetitions % 2 == 0 {
+        return Err("ECC copy-mask decoding requires a nonzero odd number of copies".to_string());
     }
 
     let source_bits = source_len
@@ -152,6 +224,7 @@ fn decode_repeated_with_stats(
         .ok_or_else(|| "ECC protected vote count overflowed this platform".to_string())?;
 
     let mut decoded = vec![0_u8; source_len];
+
     let mut stats = DecodeStats {
         logical_bits: source_bits,
         protected_votes,
@@ -161,7 +234,11 @@ fn decode_repeated_with_stats(
     for bit_index in 0..source_bits {
         let mut one_votes = 0_usize;
 
-        for repetition in 0..repetitions {
+        for repetition in 0..total_repetitions {
+            if copy_mask & (1_u64 << repetition) == 0 {
+                continue;
+            }
+
             let repetition_offset = repetition
                 .checked_mul(source_bits)
                 .ok_or_else(|| "ECC repetition offset overflowed this platform".to_string())?;
@@ -200,8 +277,9 @@ fn set_bit(bytes: &mut [u8], bit_index: usize) {
 #[cfg(test)]
 mod tests {
     use super::{
-        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_with_stats, decode_header_with_stats,
-        decode_repeated_with_stats, encode_frame, encode_repeated, encoded_header_len,
+        HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_with_stats,
+        decode_header_candidates_with_stats, decode_header_with_stats, decode_repeated_with_stats,
+        encode_frame, encode_repeated, encoded_header_len,
     };
 
     #[test]
@@ -256,6 +334,37 @@ mod tests {
                 .expect("header should decode independently");
 
         assert_eq!(recovered_header, header.to_vec());
+    }
+
+    #[test]
+    fn header_candidates_can_recover_when_seven_copy_majority_is_wrong() {
+        let header = [0x00_u8; 21];
+
+        let mut encoded =
+            encode_repeated(&header, HEADER_REPETITIONS).expect("encoding should succeed");
+
+        for repetition in [1_usize, 2, 5, 6] {
+            let start = repetition * header.len();
+            let end = start + header.len();
+
+            for byte in &mut encoded[start..end] {
+                *byte ^= 0xff;
+            }
+        }
+
+        let (seven_copy_header, _) = decode_header_with_stats(&encoded, header.len())
+            .expect("seven-copy header decoding should succeed");
+
+        assert_ne!(seven_copy_header, header);
+
+        let candidates = decode_header_candidates_with_stats(&encoded, header.len())
+            .expect("header candidate decoding should succeed");
+
+        assert!(
+            candidates
+                .iter()
+                .any(|(candidate, _, copies_used)| { candidate == &header && *copies_used == 5 })
+        );
     }
 
     #[test]

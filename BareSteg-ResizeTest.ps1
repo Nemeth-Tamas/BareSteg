@@ -211,6 +211,7 @@ try {
 
         $qimStep = $null
         $weighting = $null
+        $headerCopies = $null
         $headerRepairs = $null
         $headerMinority = $null
         $headerDisputed = $null
@@ -223,6 +224,10 @@ try {
 
         if ($rawOutput -match "Carrier weighting: ([^\r\n]+)") {
             $weighting = $Matches[1]
+        }
+
+        if ($rawOutput -match "Header copies used: (\d+)") {
+            $headerCopies = [int]$Matches[1]
         }
 
         if ($rawOutput -match "Header repairs: (\d+) bit") {
@@ -273,6 +278,7 @@ try {
             Result = $status
             QimStep = $qimStep
             Weighting = $weighting
+            HeaderCopies = $headerCopies
             HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
@@ -293,6 +299,7 @@ try {
             Result,
             QimStep,
             Weighting,
+            HeaderCopies,
             HeaderRepairs,
             HeaderMinority,
             HeaderDisputed,
