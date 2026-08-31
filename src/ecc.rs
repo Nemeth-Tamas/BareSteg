@@ -104,10 +104,13 @@ pub fn decode_header_candidates_with_stats(
     Ok(candidates)
 }
 
-pub fn header_single_copy_candidates(
+pub fn header_crc_candidates(
     encoded_header: &[u8],
     header_len: usize,
-) -> Result<Vec<Vec<u8>>, String> {
+) -> Result<Vec<([u8; 4], usize)>, String> {
+    const CRC_OFFSET: usize = 17;
+    const CRC_LEN: usize = 4;
+
     let expected_len = encoded_len(header_len, HEADER_REPETITIONS)?;
 
     if encoded_header.len() != expected_len {
@@ -117,21 +120,57 @@ pub fn header_single_copy_candidates(
         ));
     }
 
-    let mut candidates = Vec::new();
+    if header_len < CRC_OFFSET + CRC_LEN {
+        return Err("ECC header is too short to contain BareSteg CRC32".to_string());
+    }
 
-    for repetition in 0..HEADER_REPETITIONS {
-        let start = repetition
-            .checked_mul(header_len)
-            .ok_or_else(|| "ECC header copy offset overflowed this platform".to_string())?;
+    let source_bits = header_len
+        .checked_mul(8)
+        .ok_or_else(|| "ECC header bit count overflowed this platform".to_string())?;
 
-        let end = start
-            .checked_add(header_len)
-            .ok_or_else(|| "ECC header copy end overflowed this platform".to_string())?;
+    let mut majority_crc = [0_u8; CRC_LEN];
+    let mut disputed_bits = Vec::new();
 
-        let candidate = encoded_header[start..end].to_vec();
+    for crc_bit_index in 0..CRC_LEN * 8 {
+        let header_bit_index = CRC_OFFSET * 8 + crc_bit_index;
+        let mut one_votes = 0_usize;
 
-        if !candidates.contains(&candidate) {
-            candidates.push(candidate);
+        for repetition in 0..HEADER_REPETITIONS {
+            let repetition_offset = repetition
+                .checked_mul(source_bits)
+                .ok_or_else(|| "ECC repetition offset overflowed this platform".to_string())?;
+
+            if bit_at(encoded_header, repetition_offset + header_bit_index) {
+                one_votes += 1;
+            }
+        }
+
+        let zero_votes = HEADER_REPETITIONS - one_votes;
+
+        if one_votes > HEADER_REPETITIONS / 2 {
+            set_bit(&mut majority_crc, crc_bit_index);
+        }
+
+        if one_votes != 0 && zero_votes != 0 {
+            disputed_bits.push(crc_bit_index);
+        }
+    }
+
+    let mut candidates = vec![(majority_crc, 0)];
+
+    for (first_index, &first_bit) in disputed_bits.iter().enumerate() {
+        let mut candidate = majority_crc;
+
+        toggle_bit(&mut candidate, first_bit);
+        candidates.push((candidate, 1));
+
+        for &second_bit in &disputed_bits[first_index + 1..] {
+            let mut candidate = majority_crc;
+
+            toggle_bit(&mut candidate, first_bit);
+            toggle_bit(&mut candidate, second_bit);
+
+            candidates.push((candidate, 2));
         }
     }
 
@@ -366,13 +405,17 @@ fn set_bit(bytes: &mut [u8], bit_index: usize) {
     bytes[bit_index / 8] |= 1_u8 << (7 - bit_index % 8);
 }
 
+fn toggle_bit(bytes: &mut [u8], bit_index: usize) {
+    bytes[bit_index / 8] ^= 1_u8 << (7 - bit_index % 8);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_candidates_with_stats,
         decode_frame_with_stats, decode_header_candidates_with_stats, decode_header_with_stats,
         decode_repeated_with_stats, encode_frame, encode_repeated, encoded_header_len,
-        header_single_copy_candidates,
+        header_crc_candidates,
     };
 
     #[test]
@@ -461,23 +504,37 @@ mod tests {
     }
 
     #[test]
-    fn individual_header_copies_remain_available_for_field_recovery() {
+    fn crc_candidates_can_recover_two_separate_minority_bits() {
         let header = [0x5a_u8; 21];
 
         let mut encoded =
             encode_repeated(&header, HEADER_REPETITIONS).expect("encoding should succeed");
 
-        encoded[header.len() + 17] ^= 0x01;
+        for repetition in [0_usize, 1, 2] {
+            let start = repetition * header.len();
 
-        let candidates = header_single_copy_candidates(&encoded, header.len())
-            .expect("single header copies should decode");
+            encoded[start + 17] ^= 0x20;
+        }
 
-        assert!(candidates.contains(&header.to_vec()));
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate[17] != header[17])
-        );
+        for repetition in [1_usize, 3, 4] {
+            let start = repetition * header.len();
+
+            encoded[start + 19] ^= 0x01;
+        }
+
+        let (majority_header, _) = decode_header_with_stats(&encoded, header.len())
+            .expect("header majority should decode");
+
+        assert_ne!(&majority_header[17..21], &header[17..21]);
+
+        let expected_crc: [u8; 4] = header[17..21].try_into().expect("CRC field should fit");
+
+        let candidates =
+            header_crc_candidates(&encoded, header.len()).expect("CRC candidates should decode");
+
+        assert!(candidates.iter().any(|(candidate, alternate_bits)| {
+            candidate == &expected_crc && *alternate_bits == 2
+        }));
     }
 
     #[test]
@@ -511,7 +568,7 @@ mod tests {
             .expect("payload candidate decoding should succeed");
 
         assert!(candidates.iter().any(|(candidate, _, copies_used)| {
-            &candidate[header.len()..] == payload && *copies_used == 1
+            candidate[header.len()..] == payload && *copies_used == 1
         }));
     }
 

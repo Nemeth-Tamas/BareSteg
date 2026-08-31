@@ -77,7 +77,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                     recovery_stats,
                     header_repairs,
                     header_copies,
-                    crc_copies,
+                    crc_alternate_bits,
                     payload_copies,
                 )) => {
                     println!("QIM decode step: {quantization_step}");
@@ -90,7 +90,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                         }
                     );
                     println!("Header copies used: {header_copies}");
-                    println!("Header CRC copies used: {crc_copies}");
+                    println!("Header CRC alternate bits: {crc_alternate_bits}");
                     println!("Payload copies used: {payload_copies}");
                     println!("Header repairs: {header_repairs} bit(s)");
 
@@ -158,30 +158,7 @@ fn recover_with_quantization_step(
     let header_candidates =
         ecc::decode_header_candidates_with_stats(protected_header, frame::HEADER_LEN)?;
 
-    let single_copy_headers =
-        ecc::header_single_copy_candidates(protected_header, frame::HEADER_LEN)?;
-
-    let mut crc_candidates: Vec<([u8; 4], usize)> = Vec::new();
-
-    for (candidate_header, _, copies_used) in &header_candidates {
-        let crc: [u8; 4] = candidate_header[17..21]
-            .try_into()
-            .map_err(|_| "BareSteg CRC32 field is malformed".to_string())?;
-
-        if !crc_candidates.iter().any(|(existing, _)| existing == &crc) {
-            crc_candidates.push((crc, *copies_used));
-        }
-    }
-
-    for candidate_header in single_copy_headers {
-        let crc: [u8; 4] = candidate_header[17..21]
-            .try_into()
-            .map_err(|_| "BareSteg CRC32 field is malformed".to_string())?;
-
-        if !crc_candidates.iter().any(|(existing, _)| existing == &crc) {
-            crc_candidates.push((crc, 1));
-        }
-    }
+    let crc_candidates = ecc::header_crc_candidates(protected_header, frame::HEADER_LEN)?;
 
     let mut last_error = None;
 

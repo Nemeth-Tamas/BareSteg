@@ -212,7 +212,7 @@ try {
         $qimStep = $null
         $weighting = $null
         $headerCopies = $null
-        $headerCrcCopies = $null
+        $headerCrcAltBits = $null
         $payloadCopies = $null
         $headerRepairs = $null
         $headerMinority = $null
@@ -232,8 +232,8 @@ try {
             $headerCopies = [int]$Matches[1]
         }
 
-        if ($rawOutput -match "Header CRC copies used: (\d+)") {
-            $headerCrcCopies = [int]$Matches[1]
+        if ($rawOutput -match "Header CRC alternate bits: (\d+)") {
+            $headerCrcAltBits = [int]$Matches[1]
         }
 
         if ($rawOutput -match "Payload copies used: (\d+)") {
@@ -289,7 +289,7 @@ try {
             QimStep = $qimStep
             Weighting = $weighting
             HeaderCopies = $headerCopies
-            HeaderCrcCopies = $headerCrcCopies
+            HeaderCrcAltBits = $headerCrcAltBits
             PayloadCopies = $payloadCopies
             HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
@@ -312,7 +312,7 @@ try {
             QimStep,
             Weighting,
             HeaderCopies,
-            HeaderCrcCopies,
+            HeaderCrcAltBits,
             PayloadCopies,
             HeaderRepairs,
             HeaderMinority,
