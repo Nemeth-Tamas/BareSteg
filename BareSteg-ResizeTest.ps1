@@ -214,6 +214,7 @@ try {
         $headerCopies = $null
         $headerCrcAltBits = $null
         $payloadCopies = $null
+        $payloadAltBits = $null
         $headerRepairs = $null
         $headerMinority = $null
         $headerDisputed = $null
@@ -238,6 +239,10 @@ try {
 
         if ($rawOutput -match "Payload copies used: (\d+)") {
             $payloadCopies = [int]$Matches[1]
+        }
+
+        if ($rawOutput -match "Payload alternate bits: (\d+)") {
+            $payloadAltBits = [int]$Matches[1]
         }
 
         if ($rawOutput -match "Header repairs: (\d+) bit") {
@@ -291,6 +296,7 @@ try {
             HeaderCopies = $headerCopies
             HeaderCrcAltBits = $headerCrcAltBits
             PayloadCopies = $payloadCopies
+            PayloadAltBits = $payloadAltBits
             HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
@@ -314,6 +320,7 @@ try {
             HeaderCopies,
             HeaderCrcAltBits,
             PayloadCopies,
+            PayloadAltBits,
             HeaderRepairs,
             HeaderMinority,
             HeaderDisputed,

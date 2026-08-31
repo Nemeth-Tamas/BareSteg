@@ -231,7 +231,12 @@ pub fn decode_frame_candidates_with_stats(
         ));
     }
 
-    let (header, header_stats) = decode_repeated_with_stats(
+    let (majority_frame, majority_stats) =
+        decode_frame_with_stats(encoded_frame, header_len, payload_len)?;
+
+    let header = majority_frame[..header_len].to_vec();
+
+    let (_, header_stats) = decode_repeated_with_stats(
         &encoded_frame[..encoded_header_len],
         header_len,
         HEADER_REPETITIONS,
@@ -239,10 +244,7 @@ pub fn decode_frame_candidates_with_stats(
 
     let encoded_payload = &encoded_frame[encoded_header_len..];
 
-    let (majority_payload, majority_stats) =
-        decode_repeated_with_stats(encoded_payload, payload_len, PAYLOAD_REPETITIONS)?;
-
-    let mut payload_candidates = vec![(majority_payload, majority_stats, PAYLOAD_REPETITIONS)];
+    let mut frame_candidates = vec![(majority_frame, majority_stats, PAYLOAD_REPETITIONS)];
 
     for repetition in 0..PAYLOAD_REPETITIONS {
         let copy_mask = 1_u64 << repetition;
@@ -254,19 +256,13 @@ pub fn decode_frame_candidates_with_stats(
             copy_mask,
         )?;
 
-        if payload_candidates
+        if frame_candidates
             .iter()
-            .any(|(existing, _, _)| existing == &payload)
+            .any(|(existing, _, _)| existing[header_len..] == payload)
         {
             continue;
         }
 
-        payload_candidates.push((payload, stats, 1));
-    }
-
-    let mut frame_candidates = Vec::with_capacity(payload_candidates.len());
-
-    for (payload, payload_stats, copies_used) in payload_candidates {
         let mut frame = Vec::with_capacity(
             header_len
                 .checked_add(payload_len)
@@ -276,10 +272,54 @@ pub fn decode_frame_candidates_with_stats(
         frame.extend_from_slice(&header);
         frame.extend_from_slice(&payload);
 
-        frame_candidates.push((frame, header_stats.combined(payload_stats), copies_used));
+        frame_candidates.push((frame, header_stats.combined(stats), 1));
     }
 
     Ok(frame_candidates)
+}
+
+pub fn payload_disputed_bits(
+    encoded_frame: &[u8],
+    header_len: usize,
+    payload_len: usize,
+) -> Result<Vec<usize>, String> {
+    let encoded_header_len = encoded_header_len(header_len)?;
+    let expected_len = encoded_frame_len(header_len, payload_len)?;
+
+    if encoded_frame.len() != expected_len {
+        return Err(format!(
+            "ECC frame length mismatch: expected {expected_len} bytes, recovered {}",
+            encoded_frame.len()
+        ));
+    }
+
+    let encoded_payload = &encoded_frame[encoded_header_len..];
+
+    let payload_bits = payload_len
+        .checked_mul(8)
+        .ok_or_else(|| "ECC payload bit count overflowed this platform".to_string())?;
+
+    let mut disputed_bits = Vec::new();
+
+    for bit_index in 0..payload_bits {
+        let mut one_votes = 0_usize;
+
+        for repetition in 0..PAYLOAD_REPETITIONS {
+            let repetition_offset = repetition
+                .checked_mul(payload_bits)
+                .ok_or_else(|| "ECC repetition offset overflowed this platform".to_string())?;
+
+            if bit_at(encoded_payload, repetition_offset + bit_index) {
+                one_votes += 1;
+            }
+        }
+
+        if one_votes != 0 && one_votes != PAYLOAD_REPETITIONS {
+            disputed_bits.push(bit_index);
+        }
+    }
+
+    Ok(disputed_bits)
 }
 
 fn encoded_len(source_len: usize, repetitions: usize) -> Result<usize, String> {

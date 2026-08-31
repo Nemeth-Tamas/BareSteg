@@ -20,6 +20,7 @@ type RecoveryResult = (
     usize,
     usize,
     usize,
+    usize,
 );
 
 fn main() {
@@ -79,6 +80,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                     header_copies,
                     crc_alternate_bits,
                     payload_copies,
+                    payload_alternate_bits,
                 )) => {
                     println!("QIM decode step: {quantization_step}");
                     println!(
@@ -92,6 +94,7 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
                     println!("Header copies used: {header_copies}");
                     println!("Header CRC alternate bits: {crc_alternate_bits}");
                     println!("Payload copies used: {payload_copies}");
+                    println!("Payload alternate bits: {payload_alternate_bits}");
                     println!("Header repairs: {header_repairs} bit(s)");
 
                     println!(
@@ -208,6 +211,9 @@ fn recover_with_quantization_step(
         {
             let protected_frame = &protected_carrier[..protected_frame_len];
 
+            let disputed_payload_bits =
+                ecc::payload_disputed_bits(protected_frame, frame::HEADER_LEN, payload_len)?;
+
             let frame_candidates = ecc::decode_frame_candidates_with_stats(
                 protected_frame,
                 frame::HEADER_LEN,
@@ -217,24 +223,62 @@ fn recover_with_quantization_step(
             for (mut recovered_frame, recovery_stats, payload_copies) in frame_candidates {
                 recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
 
-                for (crc, crc_copies) in &crc_candidates {
-                    recovered_frame[17..21].copy_from_slice(crc);
+                if let Some((payload, crc_alternate_bits)) =
+                    decode_if_crc_matches(&mut recovered_frame, &crc_candidates)?
+                {
+                    return Ok((
+                        payload,
+                        header_stats,
+                        recovery_stats,
+                        identity_repairs + length_repairs,
+                        header_copies,
+                        crc_alternate_bits,
+                        payload_copies,
+                        0,
+                    ));
+                }
 
-                    match frame::decode(&recovered_frame) {
-                        Ok(payload) => {
+                if payload_copies > 1 {
+                    for (first_index, &first_bit) in disputed_payload_bits.iter().enumerate() {
+                        toggle_frame_payload_bit(&mut recovered_frame, first_bit);
+
+                        if let Some((payload, crc_alternate_bits)) =
+                            decode_if_crc_matches(&mut recovered_frame, &crc_candidates)?
+                        {
                             return Ok((
                                 payload,
                                 header_stats,
                                 recovery_stats,
                                 identity_repairs + length_repairs,
                                 header_copies,
-                                *crc_copies,
+                                crc_alternate_bits,
                                 payload_copies,
+                                1,
                             ));
                         }
-                        Err(error) => {
-                            last_error = Some(error);
+
+                        for &second_bit in &disputed_payload_bits[first_index + 1..] {
+                            toggle_frame_payload_bit(&mut recovered_frame, second_bit);
+
+                            if let Some((payload, crc_alternate_bits)) =
+                                decode_if_crc_matches(&mut recovered_frame, &crc_candidates)?
+                            {
+                                return Ok((
+                                    payload,
+                                    header_stats,
+                                    recovery_stats,
+                                    identity_repairs + length_repairs,
+                                    header_copies,
+                                    crc_alternate_bits,
+                                    payload_copies,
+                                    2,
+                                ));
+                            }
+
+                            toggle_frame_payload_bit(&mut recovered_frame, second_bit);
                         }
+
+                        toggle_frame_payload_bit(&mut recovered_frame, first_bit);
                     }
                 }
             }
@@ -242,8 +286,35 @@ fn recover_with_quantization_step(
     }
 
     Err(last_error.unwrap_or_else(|| {
-        "no header, length, or stored CRC candidate survived recovery".to_string()
+        "no header, length, stored CRC, or payload candidate survived recovery".to_string()
     }))
+}
+
+fn decode_if_crc_matches(
+    recovered_frame: &mut [u8],
+    crc_candidates: &[([u8; 4], usize)],
+) -> Result<Option<(Vec<u8>, usize)>, String> {
+    let actual_crc = crc32::compute(&recovered_frame[frame::HEADER_LEN..]).to_le_bytes();
+
+    for &(crc, alternate_bits) in crc_candidates {
+        if crc != actual_crc {
+            continue;
+        }
+
+        recovered_frame[17..21].copy_from_slice(&crc);
+
+        let payload = frame::decode(recovered_frame)?;
+
+        return Ok(Some((payload, alternate_bits)));
+    }
+
+    Ok(None)
+}
+
+fn toggle_frame_payload_bit(recovered_frame: &mut [u8], payload_bit_index: usize) {
+    let byte_index = frame::HEADER_LEN + payload_bit_index / 8;
+
+    recovered_frame[byte_index] ^= 1_u8 << (7 - payload_bit_index % 8);
 }
 
 fn usage() -> String {
