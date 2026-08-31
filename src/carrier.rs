@@ -32,6 +32,28 @@ pub fn extract_bytes(
     byte_count: usize,
     quantization_step: i32,
 ) -> Result<Vec<u8>, String> {
+    extract_bytes_with_reader(image, byte_count, quantization_step, read_cell_bit)
+}
+
+pub fn extract_bytes_pixel_weighted(
+    image: &Bmp,
+    byte_count: usize,
+    quantization_step: i32,
+) -> Result<Vec<u8>, String> {
+    extract_bytes_with_reader(
+        image,
+        byte_count,
+        quantization_step,
+        read_cell_bit_pixel_weighted,
+    )
+}
+
+fn extract_bytes_with_reader(
+    image: &Bmp,
+    byte_count: usize,
+    quantization_step: i32,
+    read_bit: fn(&Bmp, usize, i32) -> bool,
+) -> Result<Vec<u8>, String> {
     let required_bits = byte_count
         .checked_mul(8)
         .ok_or_else(|| "requested extraction size overflowed this platform".to_string())?;
@@ -41,7 +63,7 @@ pub fn extract_bytes(
     let mut output = vec![0_u8; byte_count];
 
     for bit_index in 0..required_bits {
-        if read_cell_bit(image, bit_index, quantization_step) {
+        if read_bit(image, bit_index, quantization_step) {
             output[bit_index / 8] |= 1 << (7 - (bit_index % 8));
         }
     }
@@ -112,6 +134,14 @@ fn read_cell_bit(image: &Bmp, cell_index: usize, quantization_step: i32) -> bool
     let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
     let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
+
+    decode_difference(correlation, quantization_step)
+}
+
+fn read_cell_bit_pixel_weighted(image: &Bmp, cell_index: usize, quantization_step: i32) -> bool {
+    let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
+    let mask = carrier_mask(cell_index);
+    let correlation = pixel_weighted_correlation(image, start_x, start_y, end_x, end_y, mask);
 
     decode_difference(correlation, quantization_step)
 }
@@ -227,6 +257,47 @@ fn cell_correlation(
 
     let positive_average = positive_sum / positive_blocks;
     let negative_average = negative_sum / negative_blocks;
+
+    positive_average as i32 - negative_average as i32
+}
+
+fn pixel_weighted_correlation(
+    image: &Bmp,
+    start_x: usize,
+    start_y: usize,
+    end_x: usize,
+    end_y: usize,
+    mask: u16,
+) -> i32 {
+    let width = end_x - start_x;
+    let height = end_y - start_y;
+
+    let mut positive_sum = 0_u64;
+    let mut negative_sum = 0_u64;
+    let mut positive_count = 0_u64;
+    let mut negative_count = 0_u64;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let local_x = x - start_x;
+            let local_y = y - start_y;
+            let block_x = local_x * BLOCKS_PER_SIDE / width;
+            let block_y = local_y * BLOCKS_PER_SIDE / height;
+            let block_index = block_y * BLOCKS_PER_SIDE + block_x;
+            let luminance = u64::from(image.luminance(x, y));
+
+            if mask & (1_u16 << block_index) != 0 {
+                positive_sum += luminance;
+                positive_count += 1;
+            } else {
+                negative_sum += luminance;
+                negative_count += 1;
+            }
+        }
+    }
+
+    let positive_average = positive_sum / positive_count;
+    let negative_average = negative_sum / negative_count;
 
     positive_average as i32 - negative_average as i32
 }

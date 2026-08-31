@@ -1,4 +1,4 @@
-const HEADER_REPETITIONS: usize = 5;
+const HEADER_REPETITIONS: usize = 7;
 const PAYLOAD_REPETITIONS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

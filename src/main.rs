@@ -11,7 +11,6 @@ use bmp::Bmp;
 const DECODE_QUANTIZATION_STEPS: [i32; 12] = [8, 9, 7, 10, 6, 11, 5, 12, 4, 3, 2, 1];
 const MAX_HEADER_IDENTITY_REPAIRS: usize = 8;
 const MAX_PAYLOAD_LENGTH_REPAIRS: usize = 4;
-const MAX_PAYLOAD_CRC_REPAIRS: usize = 4;
 
 fn main() {
     if let Err(error) = run() {
@@ -60,48 +59,58 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
     let mut last_error = None;
 
     for quantization_step in DECODE_QUANTIZATION_STEPS {
-        match recover_with_quantization_step(&image, quantization_step) {
-            Ok((payload, header_stats, recovery_stats, header_repairs)) => {
-                println!("QIM decode step: {quantization_step}");
-                println!("Header repairs: {header_repairs} bit(s)");
+        for pixel_weighted in [false, true] {
+            match recover_with_quantization_step(&image, quantization_step, pixel_weighted) {
+                Ok((payload, header_stats, recovery_stats, header_repairs)) => {
+                    println!("QIM decode step: {quantization_step}");
+                    println!(
+                        "Carrier weighting: {}",
+                        if pixel_weighted {
+                            "pixel-weighted"
+                        } else {
+                            "equal-block"
+                        }
+                    );
+                    println!("Header repairs: {header_repairs} bit(s)");
 
-                println!(
-                    "Header ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
-                    header_stats.minority_votes,
-                    header_stats.protected_votes,
-                    header_stats.disputed_bits,
-                    header_stats.logical_bits
-                );
+                    println!(
+                        "Header ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
+                        header_stats.minority_votes,
+                        header_stats.protected_votes,
+                        header_stats.disputed_bits,
+                        header_stats.logical_bits
+                    );
 
-                println!(
-                    "ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
-                    recovery_stats.minority_votes,
-                    recovery_stats.protected_votes,
-                    recovery_stats.disputed_bits,
-                    recovery_stats.logical_bits
-                );
+                    println!(
+                        "ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
+                        recovery_stats.minority_votes,
+                        recovery_stats.protected_votes,
+                        recovery_stats.disputed_bits,
+                        recovery_stats.logical_bits
+                    );
 
-                fs::write(output_path, &payload).map_err(|error| {
-                    format!("failed to write recovered payload '{output_path}': {error}")
-                })?;
+                    fs::write(output_path, &payload).map_err(|error| {
+                        format!("failed to write recovered payload '{output_path}': {error}")
+                    })?;
 
-                println!(
-                    "Recovered {} payload bytes from {} -> {} (CRC32 OK)",
-                    payload.len(),
-                    image_path,
-                    output_path
-                );
+                    println!(
+                        "Recovered {} payload bytes from {} -> {} (CRC32 OK)",
+                        payload.len(),
+                        image_path,
+                        output_path
+                    );
 
-                return Ok(());
-            }
-            Err(error) => {
-                last_error = Some(error);
+                    return Ok(());
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                }
             }
         }
     }
 
     Err(format!(
-        "failed to recover BareSteg frame with QIM steps 1 through 12; last error: {}",
+        "failed to recover BareSteg frame with all QIM and weighting candidates; last error: {}",
         last_error.unwrap_or_else(|| "no decoder candidate was attempted".to_string())
     ))
 }
@@ -109,11 +118,18 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
 fn recover_with_quantization_step(
     image: &Bmp,
     quantization_step: i32,
+    pixel_weighted: bool,
 ) -> Result<(Vec<u8>, ecc::DecodeStats, ecc::DecodeStats, usize), String> {
     let protected_capacity = carrier::capacity_bytes(image);
-    let protected_carrier = carrier::extract_bytes(image, protected_capacity, quantization_step)?;
+
+    let protected_carrier = if pixel_weighted {
+        carrier::extract_bytes_pixel_weighted(image, protected_capacity, quantization_step)?
+    } else {
+        carrier::extract_bytes(image, protected_capacity, quantization_step)?
+    };
 
     let protected_header_len = ecc::encoded_header_len(frame::HEADER_LEN)?;
+
     let protected_header = protected_carrier
         .get(..protected_header_len)
         .ok_or_else(|| "carrier is too small for the protected BareSteg header".to_string())?;
@@ -140,6 +156,7 @@ fn recover_with_quantization_step(
         }
 
         let mut candidate_header = header.clone();
+
         let length_repairs = frame::repair_payload_len(&mut candidate_header, payload_len)?;
 
         if length_repairs <= MAX_PAYLOAD_LENGTH_REPAIRS {
@@ -166,35 +183,25 @@ fn recover_with_quantization_step(
         let (mut recovered_frame, recovery_stats) =
             ecc::decode_frame_with_stats(protected_frame, frame::HEADER_LEN, payload_len)?;
 
-        let crc_repairs = {
-            let (recovered_header, recovered_payload) =
-                recovered_frame.split_at_mut(frame::HEADER_LEN);
+        recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
 
-            recovered_header.copy_from_slice(&candidate_header);
-
-            frame::repair_payload_crc(recovered_header, recovered_payload)?
-        };
-
-        if crc_repairs > MAX_PAYLOAD_CRC_REPAIRS {
-            last_error = Some(format!(
-                "payload CRC required {crc_repairs} repaired bits; maximum allowed is {MAX_PAYLOAD_CRC_REPAIRS}"
-            ));
-
-            continue;
+        match frame::decode(&recovered_frame) {
+            Ok(payload) => {
+                return Ok((
+                    payload,
+                    header_stats,
+                    recovery_stats,
+                    identity_repairs + length_repairs,
+                ));
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
         }
-
-        let payload = frame::decode(&recovered_frame)?;
-
-        return Ok((
-            payload,
-            header_stats,
-            recovery_stats,
-            identity_repairs + length_repairs + crc_repairs,
-        ));
     }
 
     Err(last_error.unwrap_or_else(|| {
-        format!("no payload candidate survived bounded identity, length, and CRC repair")
+        "no payload candidate survived bounded identity and length repair".to_string()
     }))
 }
 

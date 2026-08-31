@@ -210,6 +210,7 @@ try {
         $exitCode = $LASTEXITCODE
 
         $qimStep = $null
+        $weighting = $null
         $headerRepairs = $null
         $headerMinority = $null
         $headerDisputed = $null
@@ -218,6 +219,10 @@ try {
 
         if ($rawOutput -match "QIM decode step: (\d+)") {
             $qimStep = [int]$Matches[1]
+        }
+
+        if ($rawOutput -match "Carrier weighting: ([^\r\n]+)") {
+            $weighting = $Matches[1]
         }
 
         if ($rawOutput -match "Header repairs: (\d+) bit") {
@@ -267,6 +272,7 @@ try {
             Dimensions = $dimensions
             Result = $status
             QimStep = $qimStep
+            Weighting = $weighting
             HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
@@ -286,6 +292,7 @@ try {
             Dimensions,
             Result,
             QimStep,
+            Weighting,
             HeaderRepairs,
             HeaderMinority,
             HeaderDisputed,
