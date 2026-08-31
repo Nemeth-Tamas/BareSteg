@@ -136,8 +136,8 @@ invocation.
 
 ### Required CLI
 
-- [ ] `baresteg hide <carrier.bmp> <payload> <output.bmp>`
-- [ ] `baresteg reveal <image.bmp> <output>`
+- [x] `baresteg hide <carrier.bmp> <payload> <output.bmp>`
+- [x] `baresteg reveal <image.bmp> <output>`
 
 ### BMP Support
 

@@ -4,8 +4,7 @@ const GRID_COLUMNS: usize = 80;
 const GRID_ROWS: usize = 80;
 const BLOCKS_PER_SIDE: usize = 4;
 const BLOCK_COUNT: usize = BLOCKS_PER_SIDE * BLOCKS_PER_SIDE;
-const GLOBAL_BLOCK_COLUMNS: usize = GRID_COLUMNS * BLOCKS_PER_SIDE;
-const GLOBAL_BLOCK_ROWS: usize = GRID_ROWS * BLOCKS_PER_SIDE;
+const DECODE_PHASE_OFFSETS: [isize; 3] = [0, -1, 1];
 const QUANTIZATION_STEP: i32 = 8;
 const ADJUSTMENT_STEP: i16 = 1;
 const MAX_ADJUSTMENT_PASSES: usize = 12;
@@ -79,12 +78,13 @@ fn capacity_bits(_: &Bmp) -> usize {
 }
 
 fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), String> {
+    let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
-    let initial_correlation = cell_correlation(image, cell_index, mask);
+    let initial_correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask, 0, 0);
     let target = quantization_target(initial_correlation, bit);
 
     for _ in 0..MAX_ADJUSTMENT_PASSES {
-        let correlation = cell_correlation(image, cell_index, mask);
+        let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask, 0, 0);
         let error = target - correlation;
 
         if error.abs() <= 1 {
@@ -97,7 +97,7 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
             -ADJUSTMENT_STEP
         };
 
-        adjust_pattern(image, cell_index, mask, direction);
+        adjust_pattern(image, start_x, start_y, end_x, end_y, mask, direction);
     }
 
     Err(format!(
@@ -106,10 +106,32 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
 }
 
 fn read_cell_bit(image: &Bmp, cell_index: usize, quantization_step: i32) -> bool {
+    let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
-    let correlation = cell_correlation(image, cell_index, mask);
 
-    decode_difference(correlation, quantization_step)
+    let mut best_correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask, 0, 0);
+    let mut best_error = quantization_error(best_correlation, quantization_step);
+
+    for phase_y in DECODE_PHASE_OFFSETS {
+        for phase_x in DECODE_PHASE_OFFSETS {
+            if phase_x == 0 && phase_y == 0 {
+                continue;
+            }
+
+            let correlation = cell_correlation(
+                image, start_x, start_y, end_x, end_y, mask, phase_x, phase_y,
+            );
+
+            let error = quantization_error(correlation, quantization_step);
+
+            if error < best_error {
+                best_error = error;
+                best_correlation = correlation;
+            }
+        }
+    }
+
+    decode_difference(best_correlation, quantization_step)
 }
 
 fn cell_bounds(image: &Bmp, cell_index: usize) -> (usize, usize, usize, usize) {
@@ -167,45 +189,61 @@ fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
     left
 }
 
-fn cell_correlation(image: &Bmp, cell_index: usize, mask: u16) -> i32 {
-    let (grid_x, grid_y) = cell_grid_position(cell_index);
+fn cell_correlation(
+    image: &Bmp,
+    start_x: usize,
+    start_y: usize,
+    end_x: usize,
+    end_y: usize,
+    mask: u16,
+    phase_x: isize,
+    phase_y: isize,
+) -> i32 {
+    let width = end_x - start_x;
+    let height = end_y - start_y;
 
     let mut positive_sum = 0_u64;
     let mut negative_sum = 0_u64;
     let mut positive_count = 0_u64;
     let mut negative_count = 0_u64;
 
-    for block_y in 0..BLOCKS_PER_SIDE {
-        let global_block_y = grid_y * BLOCKS_PER_SIDE + block_y;
-        let start_y = global_block_y * image.height() / GLOBAL_BLOCK_ROWS;
-        let end_y = (global_block_y + 1) * image.height() / GLOBAL_BLOCK_ROWS;
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let local_x = x - start_x;
+            let local_y = y - start_y;
 
-        for block_x in 0..BLOCKS_PER_SIDE {
-            let global_block_x = grid_x * BLOCKS_PER_SIDE + block_x;
-            let start_x = global_block_x * image.width() / GLOBAL_BLOCK_COLUMNS;
-            let end_x = (global_block_x + 1) * image.width() / GLOBAL_BLOCK_COLUMNS;
+            let phased_x = phased_coordinate(local_x, width, phase_x);
+            let phased_y = phased_coordinate(local_y, height, phase_y);
+
+            let block_x = phased_x * BLOCKS_PER_SIDE / width;
+            let block_y = phased_y * BLOCKS_PER_SIDE / height;
             let block_index = block_y * BLOCKS_PER_SIDE + block_x;
+            let luminance = u64::from(image.luminance(x, y));
 
-            for y in start_y..end_y {
-                for x in start_x..end_x {
-                    let luminance = u64::from(image.luminance(x, y));
-
-                    if mask & (1_u16 << block_index) != 0 {
-                        positive_sum += luminance;
-                        positive_count += 1;
-                    } else {
-                        negative_sum += luminance;
-                        negative_count += 1;
-                    }
-                }
+            if mask & (1_u16 << block_index) != 0 {
+                positive_sum += luminance;
+                positive_count += 1;
+            } else {
+                negative_sum += luminance;
+                negative_count += 1;
             }
         }
+    }
+
+    if positive_count == 0 || negative_count == 0 {
+        return 0;
     }
 
     let positive_average = positive_sum / positive_count;
     let negative_average = negative_sum / negative_count;
 
     positive_average as i32 - negative_average as i32
+}
+
+fn phased_coordinate(coordinate: usize, span: usize, phase: isize) -> usize {
+    let maximum = span.saturating_sub(1) as isize;
+
+    (coordinate as isize + phase).clamp(0, maximum) as usize
 }
 
 fn carrier_mask(cell_index: usize) -> u16 {
@@ -277,18 +315,30 @@ fn decode_difference(difference: i32, quantization_step: i32) -> bool {
     nearest_bucket(difference, quantization_step).rem_euclid(2) != 0
 }
 
-fn adjust_pattern(image: &mut Bmp, cell_index: usize, mask: u16, direction: i16) {
-    let (grid_x, grid_y) = cell_grid_position(cell_index);
+fn quantization_error(difference: i32, quantization_step: i32) -> u32 {
+    let bucket_center = nearest_bucket(difference, quantization_step) * quantization_step;
 
-    for block_y in 0..BLOCKS_PER_SIDE {
-        let global_block_y = grid_y * BLOCKS_PER_SIDE + block_y;
-        let start_y = global_block_y * image.height() / GLOBAL_BLOCK_ROWS;
-        let end_y = (global_block_y + 1) * image.height() / GLOBAL_BLOCK_ROWS;
+    difference.abs_diff(bucket_center)
+}
 
-        for block_x in 0..BLOCKS_PER_SIDE {
-            let global_block_x = grid_x * BLOCKS_PER_SIDE + block_x;
-            let start_x = global_block_x * image.width() / GLOBAL_BLOCK_COLUMNS;
-            let end_x = (global_block_x + 1) * image.width() / GLOBAL_BLOCK_COLUMNS;
+fn adjust_pattern(
+    image: &mut Bmp,
+    start_x: usize,
+    start_y: usize,
+    end_x: usize,
+    end_y: usize,
+    mask: u16,
+    direction: i16,
+) {
+    let width = end_x - start_x;
+    let height = end_y - start_y;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let local_x = x - start_x;
+            let local_y = y - start_y;
+            let block_x = local_x * BLOCKS_PER_SIDE / width;
+            let block_y = local_y * BLOCKS_PER_SIDE / height;
             let block_index = block_y * BLOCKS_PER_SIDE + block_x;
 
             let delta = if mask & (1_u16 << block_index) != 0 {
@@ -297,11 +347,7 @@ fn adjust_pattern(image: &mut Bmp, cell_index: usize, mask: u16, direction: i16)
                 -direction
             };
 
-            for y in start_y..end_y {
-                for x in start_x..end_x {
-                    image.adjust_pixel(x, y, delta);
-                }
-            }
+            image.adjust_pixel(x, y, delta);
         }
     }
 }
@@ -340,25 +386,6 @@ mod tests {
             assert_eq!(large_bounds.1, small_bounds.1 * 2);
             assert_eq!(large_bounds.2, small_bounds.2 * 2);
             assert_eq!(large_bounds.3, small_bounds.3 * 2);
-        }
-    }
-
-    #[test]
-    fn global_patch_boundaries_do_not_depend_on_rounded_cell_widths() {
-        let image = Bmp::test_image(1824, 1216);
-
-        for global_block_x in 0..=super::GLOBAL_BLOCK_COLUMNS {
-            assert_eq!(
-                global_block_x * image.width() / super::GLOBAL_BLOCK_COLUMNS,
-                global_block_x * 1824 / 320
-            );
-        }
-
-        for global_block_y in 0..=super::GLOBAL_BLOCK_ROWS {
-            assert_eq!(
-                global_block_y * image.height() / super::GLOBAL_BLOCK_ROWS,
-                global_block_y * 1216 / 320
-            );
         }
     }
 
