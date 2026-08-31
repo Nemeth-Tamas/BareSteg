@@ -104,6 +104,40 @@ pub fn decode_header_candidates_with_stats(
     Ok(candidates)
 }
 
+pub fn header_single_copy_candidates(
+    encoded_header: &[u8],
+    header_len: usize,
+) -> Result<Vec<Vec<u8>>, String> {
+    let expected_len = encoded_len(header_len, HEADER_REPETITIONS)?;
+
+    if encoded_header.len() != expected_len {
+        return Err(format!(
+            "ECC header length mismatch: expected {expected_len} bytes, recovered {}",
+            encoded_header.len()
+        ));
+    }
+
+    let mut candidates = Vec::new();
+
+    for repetition in 0..HEADER_REPETITIONS {
+        let start = repetition
+            .checked_mul(header_len)
+            .ok_or_else(|| "ECC header copy offset overflowed this platform".to_string())?;
+
+        let end = start
+            .checked_add(header_len)
+            .ok_or_else(|| "ECC header copy end overflowed this platform".to_string())?;
+
+        let candidate = encoded_header[start..end].to_vec();
+
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+
+    Ok(candidates)
+}
+
 pub fn decode_frame_with_stats(
     encoded_frame: &[u8],
     header_len: usize,
@@ -271,7 +305,7 @@ mod tests {
     use super::{
         HEADER_REPETITIONS, PAYLOAD_REPETITIONS, decode_frame_with_stats,
         decode_header_candidates_with_stats, decode_header_with_stats, decode_repeated_with_stats,
-        encode_frame, encode_repeated, encoded_header_len,
+        encode_frame, encode_repeated, encoded_header_len, header_single_copy_candidates,
     };
 
     #[test]
@@ -356,6 +390,26 @@ mod tests {
             candidates
                 .iter()
                 .any(|(candidate, _, copies_used)| { candidate == &header && *copies_used == 3 })
+        );
+    }
+
+    #[test]
+    fn individual_header_copies_remain_available_for_field_recovery() {
+        let header = [0x5a_u8; 21];
+
+        let mut encoded =
+            encode_repeated(&header, HEADER_REPETITIONS).expect("encoding should succeed");
+
+        encoded[header.len() + 17] ^= 0x01;
+
+        let candidates = header_single_copy_candidates(&encoded, header.len())
+            .expect("single header copies should decode");
+
+        assert!(candidates.contains(&header.to_vec()));
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate[17] != header[17])
         );
     }
 

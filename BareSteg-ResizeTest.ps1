@@ -212,6 +212,7 @@ try {
         $qimStep = $null
         $weighting = $null
         $headerCopies = $null
+        $headerCrcCopies = $null
         $headerRepairs = $null
         $headerMinority = $null
         $headerDisputed = $null
@@ -228,6 +229,10 @@ try {
 
         if ($rawOutput -match "Header copies used: (\d+)") {
             $headerCopies = [int]$Matches[1]
+        }
+
+        if ($rawOutput -match "Header CRC copies used: (\d+)") {
+            $headerCrcCopies = [int]$Matches[1]
         }
 
         if ($rawOutput -match "Header repairs: (\d+) bit") {
@@ -279,6 +284,7 @@ try {
             QimStep = $qimStep
             Weighting = $weighting
             HeaderCopies = $headerCopies
+            HeaderCrcCopies = $headerCrcCopies
             HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
@@ -300,6 +306,7 @@ try {
             QimStep,
             Weighting,
             HeaderCopies,
+            HeaderCrcCopies,
             HeaderRepairs,
             HeaderMinority,
             HeaderDisputed,
