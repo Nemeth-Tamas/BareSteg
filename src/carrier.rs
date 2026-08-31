@@ -72,6 +72,10 @@ fn ensure_capacity(image: &Bmp, required_bits: usize) -> Result<(), String> {
     Ok(())
 }
 
+pub fn capacity_bytes(image: &Bmp) -> usize {
+    capacity_bits(image) / 8
+}
+
 fn capacity_bits(_: &Bmp) -> usize {
     GRID_COLUMNS * GRID_ROWS
 }

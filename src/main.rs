@@ -9,6 +9,7 @@ use std::{env, fs, process};
 use bmp::Bmp;
 
 const DECODE_QUANTIZATION_STEPS: [i32; 12] = [8, 7, 6, 5, 4, 3, 2, 1, 9, 10, 11, 12];
+const MAX_PAYLOAD_LENGTH_REPAIRS: usize = 8;
 
 fn main() {
     if let Err(error) = run() {
@@ -113,18 +114,69 @@ fn recover_with_quantization_step(
     let (mut header, header_stats) =
         ecc::decode_header_with_stats(&protected_header, frame::HEADER_LEN)?;
 
-    let header_repairs = frame::repair_header_identity(&mut header)?;
-    let payload_len = frame::payload_len_from_header(&header)?;
-    let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
+    let identity_repairs = frame::repair_header_identity(&mut header)?;
+    let protected_capacity = carrier::capacity_bytes(image);
 
-    let protected_frame = carrier::extract_bytes(image, protected_frame_len, quantization_step)?;
+    let mut candidates = Vec::new();
+    let mut payload_len = 0_usize;
 
-    let (recovered_frame, recovery_stats) =
-        ecc::decode_frame_with_stats(&protected_frame, frame::HEADER_LEN, payload_len)?;
+    loop {
+        let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
 
-    let payload = frame::decode(&recovered_frame)?;
+        if protected_frame_len > protected_capacity {
+            break;
+        }
 
-    Ok((payload, header_stats, recovery_stats, header_repairs))
+        let mut candidate_header = header.clone();
+        let length_repairs = frame::repair_payload_len(&mut candidate_header, payload_len)?;
+
+        if length_repairs <= MAX_PAYLOAD_LENGTH_REPAIRS {
+            candidates.push((
+                length_repairs,
+                payload_len,
+                protected_frame_len,
+                candidate_header,
+            ));
+        }
+
+        payload_len = payload_len
+            .checked_add(1)
+            .ok_or_else(|| "payload length candidate overflowed this platform".to_string())?;
+    }
+
+    candidates.sort_by_key(|candidate| (candidate.0, candidate.1));
+
+    let mut last_error = None;
+
+    for (length_repairs, payload_len, protected_frame_len, candidate_header) in candidates {
+        let protected_frame =
+            carrier::extract_bytes(image, protected_frame_len, quantization_step)?;
+
+        let (mut recovered_frame, recovery_stats) =
+            ecc::decode_frame_with_stats(&protected_frame, frame::HEADER_LEN, payload_len)?;
+
+        recovered_frame[..frame::HEADER_LEN].copy_from_slice(&candidate_header);
+
+        match frame::decode(&recovered_frame) {
+            Ok(payload) => {
+                return Ok((
+                    payload,
+                    header_stats,
+                    recovery_stats,
+                    identity_repairs + length_repairs,
+                ));
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        format!(
+            "no payload length candidate survived within {MAX_PAYLOAD_LENGTH_REPAIRS} repaired header bits"
+        )
+    }))
 }
 
 fn usage() -> String {

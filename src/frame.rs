@@ -44,6 +44,29 @@ pub fn repair_header_identity(header: &mut [u8]) -> Result<usize, String> {
     Ok(repaired_bits)
 }
 
+pub fn repair_payload_len(header: &mut [u8], payload_len: usize) -> Result<usize, String> {
+    if header.len() < HEADER_LEN {
+        return Err(format!(
+            "BareSteg frame is too short: need at least {HEADER_LEN} bytes"
+        ));
+    }
+
+    let encoded_length = u64::try_from(payload_len)
+        .map_err(|_| "payload length does not fit the BareSteg frame format".to_string())?
+        .to_le_bytes();
+
+    let mut repaired_bits = 0_usize;
+
+    for (offset, expected) in encoded_length.iter().enumerate() {
+        let index = 9 + offset;
+
+        repaired_bits += (header[index] ^ *expected).count_ones() as usize;
+        header[index] = *expected;
+    }
+
+    Ok(repaired_bits)
+}
+
 pub fn payload_len_from_header(header: &[u8]) -> Result<usize, String> {
     validate_header(header)?;
 
@@ -108,7 +131,10 @@ fn validate_header(frame: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HEADER_LEN, decode, encode, payload_len_from_header, repair_header_identity};
+    use super::{
+        HEADER_LEN, decode, encode, payload_len_from_header, repair_header_identity,
+        repair_payload_len,
+    };
 
     #[test]
     fn frame_roundtrip_recovers_payload() {
@@ -140,6 +166,23 @@ mod tests {
         assert_eq!(repaired_bits, 3);
         assert_eq!(
             payload_len_from_header(&frame[..HEADER_LEN]).expect("repaired header should validate"),
+            7
+        );
+    }
+
+    #[test]
+    fn known_payload_length_can_be_repaired() {
+        let mut frame = encode(b"payload").expect("encoding should succeed");
+
+        frame[9] ^= 0x04;
+
+        let repaired_bits =
+            repair_payload_len(&mut frame, 7).expect("payload length repair should succeed");
+
+        assert_eq!(repaired_bits, 1);
+        assert_eq!(
+            payload_len_from_header(&frame[..HEADER_LEN])
+                .expect("repaired payload length should decode"),
             7
         );
     }
