@@ -209,10 +209,15 @@ try {
 
         $exitCode = $LASTEXITCODE
 
+        $qimStep = $null
         $headerMinority = $null
         $headerDisputed = $null
         $eccMinority = $null
         $eccDisputed = $null
+
+        if ($rawOutput -match "QIM decode step: (\d+)") {
+            $qimStep = [int]$Matches[1]
+        }
 
         if (
             $rawOutput -match
@@ -252,6 +257,7 @@ try {
             Scale = "$label%"
             Dimensions = $dimensions
             Result = $status
+            QimStep = $qimStep
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
             EccMinority = $eccMinority
@@ -269,6 +275,7 @@ try {
             Scale,
             Dimensions,
             Result,
+            QimStep,
             HeaderMinority,
             HeaderDisputed,
             EccMinority,

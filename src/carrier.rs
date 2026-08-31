@@ -27,7 +27,11 @@ pub fn embed(image: &mut Bmp, data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn extract_bytes(image: &Bmp, byte_count: usize) -> Result<Vec<u8>, String> {
+pub fn extract_bytes(
+    image: &Bmp,
+    byte_count: usize,
+    quantization_step: i32,
+) -> Result<Vec<u8>, String> {
     let required_bits = byte_count
         .checked_mul(8)
         .ok_or_else(|| "requested extraction size overflowed this platform".to_string())?;
@@ -37,7 +41,7 @@ pub fn extract_bytes(image: &Bmp, byte_count: usize) -> Result<Vec<u8>, String> 
     let mut output = vec![0_u8; byte_count];
 
     for bit_index in 0..required_bits {
-        if read_cell_bit(image, bit_index) {
+        if read_cell_bit(image, bit_index, quantization_step) {
             output[bit_index / 8] |= 1 << (7 - (bit_index % 8));
         }
     }
@@ -100,12 +104,12 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
     ))
 }
 
-fn read_cell_bit(image: &Bmp, cell_index: usize) -> bool {
+fn read_cell_bit(image: &Bmp, cell_index: usize, quantization_step: i32) -> bool {
     let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
     let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
 
-    decode_difference(correlation)
+    decode_difference(correlation, quantization_step)
 }
 
 fn cell_bounds(image: &Bmp, cell_index: usize) -> (usize, usize, usize, usize) {
@@ -239,7 +243,7 @@ fn next_random(state: &mut u64) -> u64 {
 
 fn quantization_target(difference: i32, bit: bool) -> i32 {
     let desired_parity = if bit { 1 } else { 0 };
-    let nearest = nearest_bucket(difference);
+    let nearest = nearest_bucket(difference, QUANTIZATION_STEP);
 
     if nearest.rem_euclid(2) == desired_parity {
         return nearest * QUANTIZATION_STEP;
@@ -255,18 +259,18 @@ fn quantization_target(difference: i32, bit: bool) -> i32 {
     }
 }
 
-fn nearest_bucket(difference: i32) -> i32 {
-    let half_step = QUANTIZATION_STEP / 2;
+fn nearest_bucket(difference: i32, quantization_step: i32) -> i32 {
+    let half_step = quantization_step / 2;
 
     if difference >= 0 {
-        (difference + half_step) / QUANTIZATION_STEP
+        (difference + half_step) / quantization_step
     } else {
-        (difference - half_step) / QUANTIZATION_STEP
+        (difference - half_step) / quantization_step
     }
 }
 
-fn decode_difference(difference: i32) -> bool {
-    nearest_bucket(difference).rem_euclid(2) != 0
+fn decode_difference(difference: i32, quantization_step: i32) -> bool {
+    nearest_bucket(difference, quantization_step).rem_euclid(2) != 0
 }
 
 fn adjust_pattern(
@@ -315,7 +319,8 @@ mod tests {
 
         embed(&mut image, &payload).expect("embedding should succeed");
 
-        let recovered = extract_bytes(&image, payload.len()).expect("extraction should succeed");
+        let recovered = extract_bytes(&image, payload.len(), QUANTIZATION_STEP)
+            .expect("extraction should succeed");
 
         assert_eq!(recovered, payload.to_vec());
     }
@@ -352,7 +357,7 @@ mod tests {
             for bit in [false, true] {
                 let target = quantization_target(difference, bit);
 
-                assert_eq!(decode_difference(target), bit);
+                assert_eq!(decode_difference(target, QUANTIZATION_STEP), bit);
             }
         }
     }

@@ -94,32 +94,32 @@ problem rather than a reason to increase raw modulation strength.
 
 ## Planned Initial Source Layout
 
-- [ ] `src/main.rs`
+- [x] `src/main.rs`
   - CLI argument handling
   - command routing
   - user-facing errors
 
-- [ ] `src/bmp.rs`
+- [x] `src/bmp.rs`
   - read BMP files
   - validate supported BMP format
   - expose image dimensions
   - expose pixel access
   - preserve/write valid BMP files
 
-- [ ] `src/carrier.rs`
+- [x] `src/carrier.rs`
   - divide image into logical carrier regions
   - embed encoded bits into image content
   - recover encoded bits from image content
   - avoid dependency on exact original pixel values
 
-- [ ] `src/frame.rs`
+- [x] `src/frame.rs`
   - BareSteg payload framing
   - format/version marker
   - payload length
   - payload bytes
   - integrity metadata
 
-- [ ] `src/crc32.rs`
+- [x] `src/crc32.rs`
   - standard-library-only CRC32 implementation
   - payload corruption detection
 
