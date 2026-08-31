@@ -187,30 +187,42 @@ fn cell_correlation(
 
     let mut positive_sum = 0_u64;
     let mut negative_sum = 0_u64;
-    let mut positive_count = 0_u64;
-    let mut negative_count = 0_u64;
+    let mut positive_blocks = 0_u64;
+    let mut negative_blocks = 0_u64;
 
-    for y in start_y..end_y {
-        for x in start_x..end_x {
-            let local_x = x - start_x;
-            let local_y = y - start_y;
-            let block_x = local_x * BLOCKS_PER_SIDE / width;
-            let block_y = local_y * BLOCKS_PER_SIDE / height;
+    for block_y in 0..BLOCKS_PER_SIDE {
+        let block_start_y = start_y + block_y * height / BLOCKS_PER_SIDE;
+        let block_end_y = start_y + (block_y + 1) * height / BLOCKS_PER_SIDE;
+
+        for block_x in 0..BLOCKS_PER_SIDE {
+            let block_start_x = start_x + block_x * width / BLOCKS_PER_SIDE;
+            let block_end_x = start_x + (block_x + 1) * width / BLOCKS_PER_SIDE;
             let block_index = block_y * BLOCKS_PER_SIDE + block_x;
-            let luminance = u64::from(image.luminance(x, y));
+
+            let mut block_sum = 0_u64;
+            let mut block_pixels = 0_u64;
+
+            for y in block_start_y..block_end_y {
+                for x in block_start_x..block_end_x {
+                    block_sum += u64::from(image.luminance(x, y));
+                    block_pixels += 1;
+                }
+            }
+
+            let block_average = block_sum / block_pixels;
 
             if mask & (1_u16 << block_index) != 0 {
-                positive_sum += luminance;
-                positive_count += 1;
+                positive_sum += block_average;
+                positive_blocks += 1;
             } else {
-                negative_sum += luminance;
-                negative_count += 1;
+                negative_sum += block_average;
+                negative_blocks += 1;
             }
         }
     }
 
-    let positive_average = positive_sum / positive_count;
-    let negative_average = negative_sum / negative_count;
+    let positive_average = positive_sum / positive_blocks;
+    let negative_average = negative_sum / negative_blocks;
 
     positive_average as i32 - negative_average as i32
 }

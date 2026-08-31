@@ -143,14 +143,14 @@ invocation.
 
 Initial scope:
 
-- [ ] Windows BMP signature validation
-- [ ] BITMAPFILEHEADER parsing
-- [ ] BITMAPINFOHEADER parsing
-- [ ] uncompressed BI_RGB images
-- [ ] 24-bit RGB/BGR pixel data
-- [ ] row padding support
-- [ ] bottom-up BMP support
-- [ ] reject unsupported BMP variants cleanly
+- [x] Windows BMP signature validation
+- [x] BITMAPFILEHEADER parsing
+- [x] BITMAPINFOHEADER parsing
+- [x] uncompressed BI_RGB images
+- [x] 24-bit RGB/BGR pixel data
+- [x] row padding support
+- [x] bottom-up BMP support
+- [x] reject unsupported BMP variants cleanly
 
 ### BareSteg Frame v0
 
