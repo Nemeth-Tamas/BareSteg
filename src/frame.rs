@@ -24,6 +24,26 @@ pub fn encode(payload: &[u8]) -> Result<Vec<u8>, String> {
     Ok(frame)
 }
 
+pub fn repair_header_identity(header: &mut [u8]) -> Result<usize, String> {
+    if header.len() < HEADER_LEN {
+        return Err(format!(
+            "BareSteg frame is too short: need at least {HEADER_LEN} bytes"
+        ));
+    }
+
+    let mut repaired_bits = 0_usize;
+
+    for (index, expected) in MAGIC.iter().enumerate() {
+        repaired_bits += (header[index] ^ *expected).count_ones() as usize;
+        header[index] = *expected;
+    }
+
+    repaired_bits += (header[8] ^ VERSION).count_ones() as usize;
+    header[8] = VERSION;
+
+    Ok(repaired_bits)
+}
+
 pub fn payload_len_from_header(header: &[u8]) -> Result<usize, String> {
     validate_header(header)?;
 
@@ -88,7 +108,7 @@ fn validate_header(frame: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HEADER_LEN, decode, encode, payload_len_from_header};
+    use super::{HEADER_LEN, decode, encode, payload_len_from_header, repair_header_identity};
 
     #[test]
     fn frame_roundtrip_recovers_payload() {
@@ -103,6 +123,24 @@ mod tests {
         assert_eq!(
             decode(&frame).expect("frame should decode"),
             payload.to_vec()
+        );
+    }
+
+    #[test]
+    fn known_header_identity_can_be_repaired() {
+        let mut frame = encode(b"payload").expect("encoding should succeed");
+
+        frame[0] ^= 0x01;
+        frame[3] ^= 0x20;
+        frame[8] ^= 0x04;
+
+        let repaired_bits =
+            repair_header_identity(&mut frame).expect("header repair should succeed");
+
+        assert_eq!(repaired_bits, 3);
+        assert_eq!(
+            payload_len_from_header(&frame[..HEADER_LEN]).expect("repaired header should validate"),
+            7
         );
     }
 

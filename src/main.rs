@@ -58,8 +58,9 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
 
     for quantization_step in DECODE_QUANTIZATION_STEPS {
         match recover_with_quantization_step(&image, quantization_step) {
-            Ok((payload, header_stats, recovery_stats)) => {
+            Ok((payload, header_stats, recovery_stats, header_repairs)) => {
                 println!("QIM decode step: {quantization_step}");
+                println!("Header identity repairs: {header_repairs} bit(s)");
 
                 println!(
                     "Header ECC votes: {}/{} protected copies disagreed with majority across {}/{} logical bits",
@@ -105,13 +106,14 @@ fn reveal(image_path: &str, output_path: &str) -> Result<(), String> {
 fn recover_with_quantization_step(
     image: &Bmp,
     quantization_step: i32,
-) -> Result<(Vec<u8>, ecc::DecodeStats, ecc::DecodeStats), String> {
+) -> Result<(Vec<u8>, ecc::DecodeStats, ecc::DecodeStats, usize), String> {
     let protected_header_len = ecc::encoded_header_len(frame::HEADER_LEN)?;
     let protected_header = carrier::extract_bytes(image, protected_header_len, quantization_step)?;
 
-    let (header, header_stats) =
+    let (mut header, header_stats) =
         ecc::decode_header_with_stats(&protected_header, frame::HEADER_LEN)?;
 
+    let header_repairs = frame::repair_header_identity(&mut header)?;
     let payload_len = frame::payload_len_from_header(&header)?;
     let protected_frame_len = ecc::encoded_frame_len(frame::HEADER_LEN, payload_len)?;
 
@@ -122,7 +124,7 @@ fn recover_with_quantization_step(
 
     let payload = frame::decode(&recovered_frame)?;
 
-    Ok((payload, header_stats, recovery_stats))
+    Ok((payload, header_stats, recovery_stats, header_repairs))
 }
 
 fn usage() -> String {

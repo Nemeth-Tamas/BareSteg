@@ -210,6 +210,7 @@ try {
         $exitCode = $LASTEXITCODE
 
         $qimStep = $null
+        $headerRepairs = $null
         $headerMinority = $null
         $headerDisputed = $null
         $eccMinority = $null
@@ -217,6 +218,10 @@ try {
 
         if ($rawOutput -match "QIM decode step: (\d+)") {
             $qimStep = [int]$Matches[1]
+        }
+
+        if ($rawOutput -match "Header identity repairs: (\d+) bit") {
+            $headerRepairs = [int]$Matches[1]
         }
 
         if (
@@ -258,6 +263,7 @@ try {
             Dimensions = $dimensions
             Result = $status
             QimStep = $qimStep
+            HeaderRepairs = $headerRepairs
             HeaderMinority = $headerMinority
             HeaderDisputed = $headerDisputed
             EccMinority = $eccMinority
@@ -276,6 +282,7 @@ try {
             Dimensions,
             Result,
             QimStep,
+            HeaderRepairs,
             HeaderMinority,
             HeaderDisputed,
             EccMinority,

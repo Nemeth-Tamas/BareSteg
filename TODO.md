@@ -159,11 +159,11 @@ recovery.
 
 Planned fields:
 
-- [ ] BareSteg synchronization/magic pattern
-- [ ] format version
-- [ ] payload length
-- [ ] payload CRC32
-- [ ] payload bytes
+- [x] BareSteg synchronization/magic pattern
+- [x] format version
+- [x] payload length
+- [x] payload CRC32
+- [x] payload bytes
 
 Do not treat this frame format as frozen until resilience testing begins.
 
