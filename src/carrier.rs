@@ -4,7 +4,6 @@ const GRID_COLUMNS: usize = 80;
 const GRID_ROWS: usize = 80;
 const BLOCKS_PER_SIDE: usize = 4;
 const BLOCK_COUNT: usize = BLOCKS_PER_SIDE * BLOCKS_PER_SIDE;
-const DECODE_PHASE_OFFSETS: [isize; 3] = [0, -1, 1];
 const QUANTIZATION_STEP: i32 = 8;
 const ADJUSTMENT_STEP: i16 = 1;
 const MAX_ADJUSTMENT_PASSES: usize = 12;
@@ -80,11 +79,11 @@ fn capacity_bits(_: &Bmp) -> usize {
 fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), String> {
     let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
-    let initial_correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask, 0, 0);
+    let initial_correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
     let target = quantization_target(initial_correlation, bit);
 
     for _ in 0..MAX_ADJUSTMENT_PASSES {
-        let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask, 0, 0);
+        let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
         let error = target - correlation;
 
         if error.abs() <= 1 {
@@ -108,41 +107,27 @@ fn write_cell_bit(image: &mut Bmp, cell_index: usize, bit: bool) -> Result<(), S
 fn read_cell_bit(image: &Bmp, cell_index: usize, quantization_step: i32) -> bool {
     let (start_x, start_y, end_x, end_y) = cell_bounds(image, cell_index);
     let mask = carrier_mask(cell_index);
+    let correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask);
 
-    let mut best_correlation = cell_correlation(image, start_x, start_y, end_x, end_y, mask, 0, 0);
-    let mut best_error = quantization_error(best_correlation, quantization_step);
-
-    for phase_y in DECODE_PHASE_OFFSETS {
-        for phase_x in DECODE_PHASE_OFFSETS {
-            if phase_x == 0 && phase_y == 0 {
-                continue;
-            }
-
-            let correlation = cell_correlation(
-                image, start_x, start_y, end_x, end_y, mask, phase_x, phase_y,
-            );
-
-            let error = quantization_error(correlation, quantization_step);
-
-            if error < best_error {
-                best_error = error;
-                best_correlation = correlation;
-            }
-        }
-    }
-
-    decode_difference(best_correlation, quantization_step)
+    decode_difference(correlation, quantization_step)
 }
 
 fn cell_bounds(image: &Bmp, cell_index: usize) -> (usize, usize, usize, usize) {
     let (grid_x, grid_y) = cell_grid_position(cell_index);
 
-    let start_x = grid_x * image.width() / GRID_COLUMNS;
-    let end_x = (grid_x + 1) * image.width() / GRID_COLUMNS;
-    let start_y = grid_y * image.height() / GRID_ROWS;
-    let end_y = (grid_y + 1) * image.height() / GRID_ROWS;
+    let start_x = rounded_partition(grid_x, image.width(), GRID_COLUMNS);
+    let end_x = rounded_partition(grid_x + 1, image.width(), GRID_COLUMNS);
+    let start_y = rounded_partition(grid_y, image.height(), GRID_ROWS);
+    let end_y = rounded_partition(grid_y + 1, image.height(), GRID_ROWS);
 
     (start_x, start_y, end_x, end_y)
+}
+
+fn rounded_partition(index: usize, span: usize, partitions: usize) -> usize {
+    let numerator = index as u128 * span as u128;
+    let denominator = partitions as u128;
+
+    ((numerator + denominator / 2) / denominator) as usize
 }
 
 fn cell_grid_position(cell_index: usize) -> (usize, usize) {
@@ -196,8 +181,6 @@ fn cell_correlation(
     end_x: usize,
     end_y: usize,
     mask: u16,
-    phase_x: isize,
-    phase_y: isize,
 ) -> i32 {
     let width = end_x - start_x;
     let height = end_y - start_y;
@@ -211,12 +194,8 @@ fn cell_correlation(
         for x in start_x..end_x {
             let local_x = x - start_x;
             let local_y = y - start_y;
-
-            let phased_x = phased_coordinate(local_x, width, phase_x);
-            let phased_y = phased_coordinate(local_y, height, phase_y);
-
-            let block_x = phased_x * BLOCKS_PER_SIDE / width;
-            let block_y = phased_y * BLOCKS_PER_SIDE / height;
+            let block_x = local_x * BLOCKS_PER_SIDE / width;
+            let block_y = local_y * BLOCKS_PER_SIDE / height;
             let block_index = block_y * BLOCKS_PER_SIDE + block_x;
             let luminance = u64::from(image.luminance(x, y));
 
@@ -230,20 +209,10 @@ fn cell_correlation(
         }
     }
 
-    if positive_count == 0 || negative_count == 0 {
-        return 0;
-    }
-
     let positive_average = positive_sum / positive_count;
     let negative_average = negative_sum / negative_count;
 
     positive_average as i32 - negative_average as i32
-}
-
-fn phased_coordinate(coordinate: usize, span: usize, phase: isize) -> usize {
-    let maximum = span.saturating_sub(1) as isize;
-
-    (coordinate as isize + phase).clamp(0, maximum) as usize
 }
 
 fn carrier_mask(cell_index: usize) -> u16 {
@@ -315,12 +284,6 @@ fn decode_difference(difference: i32, quantization_step: i32) -> bool {
     nearest_bucket(difference, quantization_step).rem_euclid(2) != 0
 }
 
-fn quantization_error(difference: i32, quantization_step: i32) -> u32 {
-    let bucket_center = nearest_bucket(difference, quantization_step) * quantization_step;
-
-    difference.abs_diff(bucket_center)
-}
-
 fn adjust_pattern(
     image: &mut Bmp,
     start_x: usize,
@@ -356,7 +319,7 @@ fn adjust_pattern(
 mod tests {
     use super::{
         BLOCK_COUNT, QUANTIZATION_STEP, carrier_mask, cell_bounds, decode_difference, embed,
-        extract_bytes, quantization_target,
+        extract_bytes, quantization_target, rounded_partition,
     };
     use crate::bmp::Bmp;
 
@@ -387,6 +350,22 @@ mod tests {
             assert_eq!(large_bounds.2, small_bounds.2 * 2);
             assert_eq!(large_bounds.3, small_bounds.3 * 2);
         }
+    }
+
+    #[test]
+    fn fractional_normalized_boundaries_round_to_nearest_pixel() {
+        assert_eq!(rounded_partition(1, 1920, 80), 24);
+        assert_eq!(rounded_partition(1, 1280, 80), 16);
+
+        assert_eq!(rounded_partition(1, 1824, 80), 23);
+        assert_eq!(rounded_partition(2, 1824, 80), 46);
+
+        assert_eq!(rounded_partition(1, 1728, 80), 22);
+        assert_eq!(rounded_partition(2, 1728, 80), 43);
+        assert_eq!(rounded_partition(3, 1728, 80), 65);
+
+        assert_eq!(rounded_partition(1, 1152, 80), 14);
+        assert_eq!(rounded_partition(2, 1152, 80), 29);
     }
 
     #[test]

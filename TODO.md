@@ -193,17 +193,17 @@ Milestone 1 is NOT complete merely because pixels can be modified.
 
 All of these must work:
 
-- [ ] arbitrary payload bytes can be loaded
-- [ ] BareSteg frame can be generated
-- [ ] carrier capacity is checked before modification
-- [ ] payload can be embedded into a BMP
-- [ ] modified BMP can be written
-- [ ] modified BMP can be reopened from disk
-- [ ] BareSteg frame can be detected
-- [ ] payload length can be recovered
-- [ ] payload bytes can be recovered
-- [ ] CRC32 validates the recovered payload
-- [ ] recovered file is byte-for-byte identical to the original payload
+- [x] arbitrary payload bytes can be loaded
+- [x] BareSteg frame can be generated
+- [x] carrier capacity is checked before modification
+- [x] payload can be embedded into a BMP
+- [x] modified BMP can be written
+- [x] modified BMP can be reopened from disk
+- [x] BareSteg frame can be detected
+- [x] payload length can be recovered
+- [x] payload bytes can be recovered
+- [x] CRC32 validates the recovered payload
+- [x] recovered file is byte-for-byte identical to the original payload
 - [ ] malformed images fail cleanly
 - [ ] images without BareSteg data fail cleanly
 - [ ] oversized payloads fail cleanly
