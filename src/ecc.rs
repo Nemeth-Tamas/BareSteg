@@ -1,4 +1,4 @@
-const HEADER_REPETITIONS: usize = 7;
+const HEADER_REPETITIONS: usize = 5;
 const PAYLOAD_REPETITIONS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -74,39 +74,31 @@ pub fn decode_header_candidates_with_stats(
         ));
     }
 
-    let mut candidates = Vec::new();
-    let mut copies_used = HEADER_REPETITIONS;
+    let (header, stats) = decode_header_with_stats(encoded_header, header_len)?;
 
-    while copies_used >= 3 {
-        let mask_limit = 1_u64 << HEADER_REPETITIONS;
+    let mut candidates = vec![(header, stats, HEADER_REPETITIONS)];
+    let mask_limit = 1_u64 << HEADER_REPETITIONS;
 
-        for copy_mask in 1_u64..mask_limit {
-            if copy_mask.count_ones() as usize != copies_used {
-                continue;
-            }
-
-            let (header, stats) = decode_repeated_copy_mask_with_stats(
-                encoded_header,
-                header_len,
-                HEADER_REPETITIONS,
-                copy_mask,
-            )?;
-
-            if candidates
-                .iter()
-                .any(|(existing, _, _)| existing == &header)
-            {
-                continue;
-            }
-
-            candidates.push((header, stats, copies_used));
+    for copy_mask in 1_u64..mask_limit {
+        if copy_mask.count_ones() != 3 {
+            continue;
         }
 
-        if copies_used < 5 {
-            break;
+        let (header, stats) = decode_repeated_copy_mask_with_stats(
+            encoded_header,
+            header_len,
+            HEADER_REPETITIONS,
+            copy_mask,
+        )?;
+
+        if candidates
+            .iter()
+            .any(|(existing, _, _)| existing == &header)
+        {
+            continue;
         }
 
-        copies_used -= 2;
+        candidates.push((header, stats, 3));
     }
 
     Ok(candidates)
@@ -211,7 +203,7 @@ fn decode_repeated_copy_mask_with_stats(
 
     let repetitions = copy_mask.count_ones() as usize;
 
-    if repetitions == 0 || repetitions % 2 == 0 {
+    if repetitions == 0 || repetitions.is_multiple_of(2) {
         return Err("ECC copy-mask decoding requires a nonzero odd number of copies".to_string());
     }
 
@@ -337,13 +329,13 @@ mod tests {
     }
 
     #[test]
-    fn header_candidates_can_recover_when_seven_copy_majority_is_wrong() {
+    fn header_candidates_can_recover_when_five_copy_majority_is_wrong() {
         let header = [0x00_u8; 21];
 
         let mut encoded =
             encode_repeated(&header, HEADER_REPETITIONS).expect("encoding should succeed");
 
-        for repetition in [1_usize, 2, 5, 6] {
+        for repetition in [1_usize, 2, 4] {
             let start = repetition * header.len();
             let end = start + header.len();
 
@@ -352,10 +344,10 @@ mod tests {
             }
         }
 
-        let (seven_copy_header, _) = decode_header_with_stats(&encoded, header.len())
-            .expect("seven-copy header decoding should succeed");
+        let (five_copy_header, _) = decode_header_with_stats(&encoded, header.len())
+            .expect("five-copy header decoding should succeed");
 
-        assert_ne!(seven_copy_header, header);
+        assert_ne!(five_copy_header, header);
 
         let candidates = decode_header_candidates_with_stats(&encoded, header.len())
             .expect("header candidate decoding should succeed");
@@ -363,7 +355,7 @@ mod tests {
         assert!(
             candidates
                 .iter()
-                .any(|(candidate, _, copies_used)| { candidate == &header && *copies_used == 5 })
+                .any(|(candidate, _, copies_used)| { candidate == &header && *copies_used == 3 })
         );
     }
 
